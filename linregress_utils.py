@@ -3,10 +3,10 @@ This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
 todo_diff_regress_layer: (done) fix sampling_fn
-todo_diff_regress_layer: write predict_fn
+todo_diff_regress_layer: (done) write predict_fn
 todo_diff_regress_layer: (done)write entropy_fn
 todo_diff_regress_layer: write optim routine to return the optimal state to explore for infogain
-todo_diff_regress_layer: make the bayesian_regression work for arbitrary f_k(x), and provide methods for
+todo_diff_regress_layer: (done) make the bayesian_regression work for arbitrary f_k(x), and provide methods for
       setting these f_k to the appropriate ones for polynomial regression
 todo_diff_regress_layer: unit tests to make sure all works
 todo_diff_regress_layer: refactor stuff into smaller functions
@@ -17,16 +17,15 @@ todo_diff_regress_layer: automatic variable selection by integrating over the pr
 import torch as t
 import numpy as np
 
-def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=1, b_0=1,  degree_polynomial=1):
+def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor([1]), b_0=t.Tensor([1])):
     """
     :param data_x: Tensor(n_data, size_x)
-    :param data_y: Tensor(n_data, size_y)
-    :param prior_mu: Tensor(size_x, size_y), the prior mean
-    :param prior_precision: Tensor(size_x, size_x, size_y)
-    :param a_0: prior parameter for Inv-Normal distribution over the noise level sigma^2
-    :param b_0, prior parameter for Inv-Normal distribution over the noise level sigma^2
-    :param degree_polynomial: the degree of the polynomial to fit, determines what size_x is
-    :return: dict with the following fields: 'mu_n', 'lambda_n', 'a_n', 'b_n', 'sampling_fn', 'predict_fn', 'entropy'
+    :param data_y: Tensor(n_data)
+    :param prior_mu: Tensor(size_x), the prior mean
+    :param prior_precision: Tensor(size_x, size_x)
+    :param a_0: Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
+    :param b_0, Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
+    :return: dict with the following fields: 'mu_n', 'lambda_n', 'a_n', 'b_n', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
 
     we return the posterior mean and precision, as well as a function which allows for computing p(y|x,Data), the
     prediction for a point averaged conditioned on x and the Data, which averages over our uncertainty
@@ -64,9 +63,9 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=1, b_0=1,
     # ==========================================================================
     # computing posterior p(sigma^2| X, y), which is an Inv-Normal distribution
 
-    term_0 = data_y.T @ data_y
-    term_1 = prior_mu.T @ prior_precision @ prior_mu
-    term_2 = - mu_n.T @ precision_n @ mu_n
+    term_0 = t.norm(data_y)**2
+    term_1 = prior_mu @ prior_precision @ prior_mu
+    term_2 = - mu_n @ precision_n @ mu_n
 
     # these are the posterior parameters for the sigma^2 side of the posterior
     a_n = a_0 + x_dim/2
@@ -80,6 +79,18 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=1, b_0=1,
     # the two distributions used for the reparam trick
     gamma_dist = t.distributions.gamma.Gamma(a_n, 1)
     multNormal = t.distributions.MultivariateNormal(t.zeros(x_dim), t.eye(x_dim))
+
+    # ==========================================================================
+    # computing P(data | model) = int P(data | beta, model) P(beta|model)
+    # see
+
+    log_model_evidence = x_dim/2 * t.log(t.Tensor([2*np.pi]))
+    # this is computing log( sqrt(det(precision_0)/det(precision_n)) )
+    log_model_evidence += 0.5 * (t.logdet(prior_precision) + t.sum(t.log(L)))
+    log_model_evidence += a_0 * t.log(t.tensor([b_0]))
+    log_model_evidence -= a_n * t.log(b_n)
+    log_model_evidence += t.lgamma(a_n) - t.lgamma(t.Tensor([a_0]))
+
 
     # this function samples parameters from the posterior in a differentiable manner
     # with the reparametrization trick
@@ -109,8 +120,21 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=1, b_0=1,
     # we give two uncertainties: the uncertainty of the mean, and the predicted aleatoric data variance
     # when our functions are linear, this is just the same as predicting with mu_n, but this is
     # different if we're using nonlinear functions in the inputs
-    def predict_fn(predict_data_x):
-        pass
+    def predict_fn(predict_data_x, n_samples):
+        """
+        :param predict_data_x: tensor(n_data, size_x)
+        :param n_samples: int
+        :return: ave_pred : tensor(n_data), std_pred : tensor(n_data)
+        """
+
+        # generate n_samples from the posterior:
+        betas = sampling_fn(n_samples)
+
+        # predict using each sample at all points
+        # this is now size(n_data, n_samples)
+        preds = predict_data_x @ betas.T
+
+        return preds.mean(dim=1), preds.std(dim=1)
 
     # computes the entropy of the posterior in a differentiable manner
     def entropy_fn():
@@ -146,33 +170,82 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=1, b_0=1,
             'b_n': b_n,
             'sampling_fn': sampling_fn,
             'predict_fn': predict_fn,
-            'entropy_fn': entropy_fn
+            'entropy_fn': entropy_fn,
+            'log_model_ev': log_model_evidence
             }
 
-def optimal_infogain_bayesian_regress():
+def apply_and_concat(x, fn_list):
     """
-    given datasets data_x and data_y, computes the next point which in expectation will
-    lead to the greatest reduction in the entropy of the posterior distribution
+    takes a one dimensional tensor x and a list of functions, and stacks them
 
-    first, we compute the posterior parameters for data_x and data_y,
-    then we can pass those parameters as detached tensors as priors to the bayesian_regression function
+    :param x: tensor(n)
+    :param fn_list: list of functions
+    :return: tensor(n, len(fn_list))
+    """
+    x = t.squeeze(x)
+    return t.stack([fn(x) for fn in fn_list], dim=1)
 
-    for a candidate x, then, we need to sample a bunch of y-predictions from the current posterior,
-    then compute the implied entropy reduction with this datapoint for each of those y-predictions,
-    then take the derivative of that average with respect to x, and optimise that.
 
-    This is then an MDP, and we need to optimise this thing.
-
-    Up until now everything was exact or asymptotically exact,
-    but now we need to find the derivative of the optimal x with respect to the prior parameters
-    perhaps even finding the second derivatives here.
-
-    Then, once we have an expression for the changes in posterior given a new point, we can
-    solve the resulting MDP and find the sequence of points to explore in order to
-    minimaly reduce the entropy of the posterior.
+def infogain_bayesian_regress(data_x, data_y, fn_list, new_x, n_samples=100):
+    """
+    We compute the expected decrease in the entropy of the posterior of bayesian regression
+    if we add a new sample new_x to the dataset
 
     :return:
     """
 
+    # first do bayesian regression on data_x and data_y, and compute the posterior
 
-    pass
+    data_x = apply_and_concat(data_x, fn_list)
+    new_x = apply_and_concat(new_x, fn_list)
+
+    size_x = data_x.size(1)
+    sol_dict = bayesian_regression(data_x, data_y, prior_mu=t.zeros(1), prior_precision=1e-7 * t.eye(size_x, size_x))
+
+    # this gives us the mean and variance for the predictions from the posterior
+    new_x_preds_mean, new_x_preds_std = sol_dict['predict_fn'](new_x, n_samples=1000)
+
+    # now we sample a bunch of outcomes for new_x
+
+    simulated_y_at_new_x = new_x_preds_std * t.randn(n_samples) + new_x_preds_mean
+
+    # then using the posterior as the prior, do bayesian regression using only
+    # new_x as data with the various predicted data,
+    # and compute the difference in entropies
+
+    # todo: make this differentiable?
+    entropy_samples = [ bayesian_regression(new_x, t.Tensor([y]),
+                          prior_mu=sol_dict['mu_n'],
+                          prior_precision=sol_dict['precision_n'],
+                          a_0=sol_dict['a_n'],
+                          b_0=sol_dict['b_n'])['entropy_fn']() for y in simulated_y_at_new_x]
+
+    return sol_dict['entropy_fn']() - t.mean(entropy_samples)
+
+
+if __name__ == "__main__":
+
+    data_noise = 0.1
+
+    coefs = t.randn(3)
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x:x**2]
+
+    data_x = t.arange(0, 10, 0.1).unsqueeze(1)
+    data_y = coefs[0] + coefs[1]*data_x + coefs[2]*data_x**2
+    data_y += t.randn(data_y.size())*data_noise
+    data_y = t.squeeze(data_y)
+
+    # data_x = t.cat([t.ones(data_x.size()), data_x, data_x**2], dim=1)
+    data_x = apply_and_concat(data_x, fns)
+
+    print(data_x.size())
+    size_x = data_x.size(1)
+
+    sol_dict = bayesian_regression(data_x, data_y, prior_mu=t.zeros(size_x), prior_precision=1e-7*t.eye(size_x,size_x))
+
+    print(coefs)
+    print(sol_dict)
+
+
+
