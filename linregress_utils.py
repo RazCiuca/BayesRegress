@@ -2,6 +2,7 @@
 This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
+todo: fix bug where bayesian regression is not commutative in the dataset
 todo: test differentiability of everything
 todo: test infogain routine that computes entropy differences
 todo: write visualization functions for infogain with simple polynomials
@@ -13,15 +14,16 @@ todo : unit tests to make sure all works
 import torch as t
 import numpy as np
 
-def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor([0.1]), b_0=t.Tensor([1])):
+def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Tensor([0.1]), b_0=t.Tensor([1])):
     """
     :param data_x: Tensor(n_data, size_x)
     :param data_y: Tensor(n_data)
+    :param fns: list of functions to apply row-wise to data_x to use as regression variables
     :param prior_mu: Tensor(size_x), the prior mean
     :param prior_precision: Tensor(size_x, size_x)
     :param a_0: Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
     :param b_0, Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
-    :return: dict with the following fields: 'mu_n', 'lambda_n', 'a_n', 'b_n', 'mle_var', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
+    :return: dict with the following fields: 'fns', 'mu_n', 'lambda_n', 'a_n', 'b_n', 'mle_var', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
 
     we return the posterior mean and precision, as well as a function which allows for computing p(y|x,Data), the
     prediction for a point averaged conditioned on x and the Data, which averages over our uncertainty
@@ -31,6 +33,9 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     This bayesian regression allows us to compute a posterior over P(beta, sigma^2 | X, y),
     which is the probability distribution of our linear parameters and the unknown noise level sigma^2
     """
+
+    # apply the transformations in fns to the data
+    data_x = apply_and_concat(data_x, fns)
 
     x_dim = data_x.size(1)
     n_data = data_x.size(0)
@@ -46,7 +51,8 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     # this distribution is N(mu_n, sigma^2 * (precision_n)^(-1)), notice that we still depend on the unknown sigma^2
     precision_n = xTx + prior_precision
     inv_prec_n = t.inverse(precision_n)
-    mu_n = inv_prec_n @ (xTx @ beta + prior_precision @ prior_mu)
+    # mu_n = inv_prec_n @ (xTx @ beta + prior_precision @ prior_mu)
+    mu_n = inv_prec_n @ (data_x.T @ data_y + prior_precision @ prior_mu)
 
     # ==============================
     # this is the posterior covariance, not yet scaled by sigma
@@ -60,7 +66,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     # ==========================================================================
     # computing posterior p(sigma^2| X, y), which is an Inv-Normal distribution
 
-    term_0 = t.norm(data_y)**2
+    term_0 = t.sum(data_y**2)
     term_1 = prior_mu @ prior_precision @ prior_mu
     term_2 = - mu_n @ precision_n @ mu_n
 
@@ -94,7 +100,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     def sampling_fn(n_samples):
 
         # first sample from a Gamma, then invert it, then scale it
-        gamma_samples = gamma_dist.sample(t.Size(n_samples))
+        gamma_samples = gamma_dist.sample(t.Size([n_samples]))
 
         # these are the sigma^2 samples from our posterior
         inv_gamma_samples = b_n * 1.0/gamma_samples
@@ -103,11 +109,11 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
         # now we sample from a multivariate normal, and scale it by the posterior covariance sqrt
         # scale it by the sigma samples we have
         # and add the posterior mean
-        unit_normal_samples = multNormal.sample(t.Size(n_samples))
+        unit_normal_samples = multNormal.sample(t.Size([n_samples]))
 
         # generate samples with the reparametrization trick, here mu_n is differentiable,
         # sigma_samples is differentiable through b_n, and cov_n_sqrt is differentiable too
-        samples = mu_n + (( sigma_samples * unit_normal_samples) @ cov_n_sqrt.T).T
+        samples = mu_n.unsqueeze(0) + (( sigma_samples * unit_normal_samples) @ cov_n_sqrt.T)
 
         # samples have shape [n_samples, data_x.size(0)]
         return samples
@@ -129,7 +135,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
 
         # predict using each sample at all points
         # this is now size(n_data, n_samples)
-        preds = predict_data_x @ betas.T
+        preds = apply_and_concat(predict_data_x, fns) @ betas.T
 
         return preds.mean(dim=1), preds.std(dim=1)
 
@@ -161,8 +167,9 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
         return H_beta_given_sigma_2 + H_sigma_2
 
     # todo_diff_regress_layer: don't return predicion_n, but the covariance scales by the mle for sigma
-    return {"mu_n": mu_n,
-            "lambda_n": precision_n,
+    return {"fns": fns,
+            "mu_n": mu_n,
+            "precision_n": precision_n,
             'a_n': a_n,
             'b_n': b_n,
             'mle_var' : b_n/(a_n-1),
@@ -176,15 +183,14 @@ def apply_and_concat(x, fn_list):
     """
     takes a one dimensional tensor x and a list of functions, and stacks them
 
-    :param x: tensor(n)
+    :param x: tensor(n, dim_x)
     :param fn_list: list of functions
     :return: tensor(n, len(fn_list))
     """
-    x = t.squeeze(x)
-    return t.stack([fn(x) for fn in fn_list], dim=1)
+    return t.cat([fn(x) for fn in fn_list], dim=1)
 
 
-def infogain_bayesian_regress(data_x, data_y, fn_list, new_x, n_samples=100):
+def infogain_bayesian_regress(regress_dict, new_x, n_samples=100):
     """
     We compute the expected decrease in the entropy of the posterior of bayesian regression
     if we add a new sample new_x to the dataset
@@ -194,14 +200,10 @@ def infogain_bayesian_regress(data_x, data_y, fn_list, new_x, n_samples=100):
 
     # first do bayesian regression on data_x and data_y, and compute the posterior
 
-    data_x = apply_and_concat(data_x, fn_list)
-    new_x = apply_and_concat(new_x, fn_list)
-
-    size_x = data_x.size(1)
-    sol_dict = bayesian_regression(data_x, data_y, prior_mu=t.zeros(1), prior_precision=1e-7 * t.eye(size_x, size_x))
+    fn_list = regress_dict['fns']
 
     # this gives us the mean and variance for the predictions from the posterior
-    new_x_preds_mean, new_x_preds_std = sol_dict['predict_fn'](new_x, n_samples=1000)
+    new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=1000)
 
     # now we sample a bunch of outcomes for new_x, in a differentiable way
     simulated_y_at_new_x = new_x_preds_std * t.randn(n_samples) + new_x_preds_mean
@@ -210,13 +212,15 @@ def infogain_bayesian_regress(data_x, data_y, fn_list, new_x, n_samples=100):
     # new_x as data with the various predicted data,
     # and compute the difference in entropies
 
-    entropy_samples = [ bayesian_regression(new_x, simulated_y_at_new_x[i:i+1],
-                          prior_mu=sol_dict['mu_n'],
-                          prior_precision=sol_dict['precision_n'],
-                          a_0=sol_dict['a_n'],
-                          b_0=sol_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
+    entropy_samples = [ bayesian_regression(new_x, simulated_y_at_new_x[i:i+1], fn_list,
+                          prior_mu=regress_dict['mu_n'],
+                          prior_precision=regress_dict['precision_n'],
+                          a_0=regress_dict['a_n'],
+                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
 
-    return sol_dict['entropy_fn']() - t.mean(entropy_samples)
+    print(t.cat(entropy_samples))
+
+    return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
 
 def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
     """
@@ -233,7 +237,7 @@ def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
     raise NotImplemented
 
 
-if __name__ == "__main__":
+if __name__ == "__main__2":
 
     data_noise = 0.5
 
@@ -246,16 +250,66 @@ if __name__ == "__main__":
     data_y += t.randn(data_y.size())*data_noise
     data_y = t.squeeze(data_y)
 
-    # data_x = t.cat([t.ones(data_x.size()), data_x, data_x**2], dim=1)
-    data_x = apply_and_concat(data_x, fns)
+    data_infogain = 10*t.rand(1,1)
 
     print(data_x.size())
-    size_x = data_x.size(1)
+    size_x = len(fns)
 
-    sol_dict = bayesian_regression(data_x, data_y, prior_mu=t.zeros(size_x), prior_precision=1e-7*t.eye(size_x,size_x))
+    sol_dict = bayesian_regression(data_x, data_y, fns,
+                                   prior_mu=t.zeros(size_x),
+                                   prior_precision=1e-7*t.eye(size_x,size_x))
+
+    infogain = infogain_bayesian_regress(sol_dict,data_infogain,n_samples=100)
 
     print(coefs)
     print(sol_dict)
+    print(infogain)
+
+
+if __name__ == "__main__":
+    # consistency checking of bayesian computation:
+    # updating in two steps over data should be equivalent to updating in one step
+
+    data_noise = 0.5
+
+    coefs = t.randn(3)
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x: x ** 2]
+
+    data_x = t.arange(0, 10, 0.1).unsqueeze(1)
+    data_y = coefs[0] + coefs[1] * data_x + coefs[2] * data_x ** 2
+    data_y += t.randn(data_y.size()) * data_noise
+    data_y = t.squeeze(data_y)
+
+    n_split = int(data_x.size(0)/2)
+    size_x = len(fns)
+
+    x0 = data_x[:n_split]
+    y0 = data_y[:n_split]
+    x1 = data_x[n_split:]
+    y1 = data_y[n_split:]
+
+    # updating on the whole thing at once
+    sol_dict = bayesian_regression(data_x, data_y, fns, prior_mu=t.zeros(size_x), prior_precision=1e-2*t.eye(size_x,size_x))
+
+    # updating in two steps
+    sol_dict_0 = bayesian_regression(x0, y0, fns, prior_mu=t.zeros(size_x), prior_precision=1e-2*t.eye(size_x,size_x))
+    sol_dict_1 = bayesian_regression(x1, y1, fns, prior_mu=sol_dict_0['mu_n'],
+                                     prior_precision=sol_dict_0['precision_n'],
+                                     a_0=sol_dict_0['a_n'],
+                                     b_0=sol_dict_0['b_n'])
+
+    sol_dict_2 = bayesian_regression(x1, y1, fns, prior_mu=t.zeros(size_x),
+                                     prior_precision=1e-2 * t.eye(size_x, size_x))
+    sol_dict_3 = bayesian_regression(x0, y0, fns, prior_mu=sol_dict_2['mu_n'],
+                                     prior_precision=sol_dict_2['precision_n'],
+                                     a_0=sol_dict_2['a_n'],
+                                     b_0=sol_dict_2['b_n'])
+
+    print(sol_dict)
+    print(sol_dict_1)
+    print(sol_dict_3)
+
 
 
 
