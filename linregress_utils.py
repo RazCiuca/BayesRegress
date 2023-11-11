@@ -2,22 +2,18 @@
 This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
-todo_diff_regress_layer: (done) fix sampling_fn
-todo_diff_regress_layer: (done) write predict_fn
-todo_diff_regress_layer: (done)write entropy_fn
-todo_diff_regress_layer: write optim routine to return the optimal state to explore for infogain
-todo_diff_regress_layer: (done) make the bayesian_regression work for arbitrary f_k(x), and provide methods for
-      setting these f_k to the appropriate ones for polynomial regression
-todo_diff_regress_layer: unit tests to make sure all works
-todo_diff_regress_layer: refactor stuff into smaller functions
-
-todo_diff_regress_layer: automatic variable selection by integrating over the prior precision?
+todo: test differentiability of everything
+todo: test infogain routine that computes entropy differences
+todo: write visualization functions for infogain with simple polynomials
+todo: write optim routine to return the optimal state to explore for infogain
+todo: write regression function for arbitrary numbers of hypotheses
+todo : unit tests to make sure all works
 
 """
 import torch as t
 import numpy as np
 
-def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor([1]), b_0=t.Tensor([1])):
+def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor([0.1]), b_0=t.Tensor([1])):
     """
     :param data_x: Tensor(n_data, size_x)
     :param data_y: Tensor(n_data)
@@ -25,7 +21,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     :param prior_precision: Tensor(size_x, size_x)
     :param a_0: Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
     :param b_0, Tensor(1) prior parameter for Inv-Normal distribution over the noise level sigma^2
-    :return: dict with the following fields: 'mu_n', 'lambda_n', 'a_n', 'b_n', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
+    :return: dict with the following fields: 'mu_n', 'lambda_n', 'a_n', 'b_n', 'mle_var', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
 
     we return the posterior mean and precision, as well as a function which allows for computing p(y|x,Data), the
     prediction for a point averaged conditioned on x and the Data, which averages over our uncertainty
@@ -37,6 +33,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     """
 
     x_dim = data_x.size(1)
+    n_data = data_x.size(0)
 
     # MLE for the parameters
     beta = t.linalg.pinv(data_x) @ data_y
@@ -68,7 +65,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
     term_2 = - mu_n @ precision_n @ mu_n
 
     # these are the posterior parameters for the sigma^2 side of the posterior
-    a_n = a_0 + x_dim/2
+    a_n = a_0 + n_data/2
     b_n = b_0 + 0.5 * (term_0 + term_1 + term_2)
 
     # ==========================================================================
@@ -168,6 +165,7 @@ def bayesian_regression(data_x, data_y, prior_mu, prior_precision, a_0=t.Tensor(
             "lambda_n": precision_n,
             'a_n': a_n,
             'b_n': b_n,
+            'mle_var' : b_n/(a_n-1),
             'sampling_fn': sampling_fn,
             'predict_fn': predict_fn,
             'entropy_fn': entropy_fn,
@@ -205,27 +203,39 @@ def infogain_bayesian_regress(data_x, data_y, fn_list, new_x, n_samples=100):
     # this gives us the mean and variance for the predictions from the posterior
     new_x_preds_mean, new_x_preds_std = sol_dict['predict_fn'](new_x, n_samples=1000)
 
-    # now we sample a bunch of outcomes for new_x
-
+    # now we sample a bunch of outcomes for new_x, in a differentiable way
     simulated_y_at_new_x = new_x_preds_std * t.randn(n_samples) + new_x_preds_mean
 
     # then using the posterior as the prior, do bayesian regression using only
     # new_x as data with the various predicted data,
     # and compute the difference in entropies
 
-    # todo: make this differentiable?
-    entropy_samples = [ bayesian_regression(new_x, t.Tensor([y]),
+    entropy_samples = [ bayesian_regression(new_x, simulated_y_at_new_x[i:i+1],
                           prior_mu=sol_dict['mu_n'],
                           prior_precision=sol_dict['precision_n'],
                           a_0=sol_dict['a_n'],
-                          b_0=sol_dict['b_n'])['entropy_fn']() for y in simulated_y_at_new_x]
+                          b_0=sol_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
 
     return sol_dict['entropy_fn']() - t.mean(entropy_samples)
+
+def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
+    """
+    we do bayesian regression over the parameter of each of the hypotheses
+    when we predict, we average over the likelihood of all hypotheses
+    when we compute infogain, we compute the information gain with all
+    hypotheses too
+
+    :param data_x: tensor(n_data, size_x)
+    :param data_y: tensor(n_data)
+    :param hypotheses: list of list of size_x -> 1 functions
+    :return:
+    """
+    raise NotImplemented
 
 
 if __name__ == "__main__":
 
-    data_noise = 0.1
+    data_noise = 0.5
 
     coefs = t.randn(3)
 
