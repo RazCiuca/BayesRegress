@@ -96,7 +96,8 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
 
     log_model_evidence = x_dim/2 * t.log(t.Tensor([2*np.pi]))
     # this is computing log( sqrt(det(precision_0)/det(precision_n)) )
-    log_model_evidence += 0.5 * (t.logdet(prior_precision) + t.sum(t.log(L)))
+    # log_model_evidence += 0.5 * (t.logdet(prior_precision) - t.sum(t.log(L)))
+    log_model_evidence += 0.5 * (t.logdet(prior_precision) - t.logdet(precision_n))
     log_model_evidence += a_0 * t.log(t.tensor([b_0]))
     log_model_evidence -= a_n * t.log(b_n)
     log_model_evidence += t.lgamma(a_n) - t.lgamma(t.Tensor([a_0]))
@@ -313,9 +314,11 @@ if __name__ == "__main__":
                                      a_0=sol_dict_2['a_n'],
                                      b_0=sol_dict_2['b_n'])
 
+    # the log model evidences disagree because they don't have the same data, that's fine,
+    # it doesn't mean the code isn't working.
     print(sol_dict)
     print(sol_dict_1)
-    print(sol_dict_3)
+    # print(sol_dict_3)
 
 
 

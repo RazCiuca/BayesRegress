@@ -58,17 +58,27 @@ def bayesian_logistic_regression(data_x, data_y, n_cat, fns, prior_mu, prior_pre
 
     # Step 1: taking a few gradient hessian steps to get to the minimum without creating an autodiff graph
 
+    step_norm = t.inf
+    epsilon = 1e-2
+
     with t.no_grad:
-        # shape [n_data, n_cat]
-        mu = t.sigmoid(data_x @ w.T)
-        # shape [dim_x, n_cat]
-        gradient = data_x.T @ (mu - data_y)
+        while step_norm > epsilon:
+            # shape [n_data, n_cat]
+            mu = t.sigmoid(data_x @ w.T)
+            # shape [dim_x, n_cat]
+            gradient = data_x.T @ (mu - data_y)
 
-        # we're doing a sum over a tensor with dim [n_data, n_cat, dim_x, dim_x]
-        # and keeping only the last 3 dimensions
-        hessian = t.einsum("nk, ni, nj -> kij", mu*(1-mu), data_x, data_x)
+            # we're doing a sum over a tensor with dim [n_data, n_cat, dim_x, dim_x]
+            # and keeping only the last 3 dimensions [n_cat, dim_x, dim_x]
+            hessian = t.einsum("nk, ni, nj -> kij", mu*(1-mu), data_x, data_x)
 
-        # now compute the newton step update
+            # now compute the newton step update
+            # step has shape [n_cat, dim_x]
+            step = t.linalg.solve(hessian, -gradient.T)
+
+            # compute the norm of step for convergence detection
+            step_norm = t.norm(step).item()
+            w += step
 
     # Step 2: compute the hessian at the minimum with autodiff on
 
