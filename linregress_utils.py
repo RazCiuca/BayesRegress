@@ -10,6 +10,8 @@ todo: write optim routine to return the optimal state to explore for infogain
 todo: write regression function for arbitrary numbers of hypotheses
 todo : unit tests to make sure all works
 
+todo: use t.linalg.solve(A,B) instead of A.inverse() @ B, it's faster and more stable
+
 """
 import torch as t
 import numpy as np
@@ -50,18 +52,23 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
     # these are the posterior parameters for p(beta|sigma^2, X, y)
     # this distribution is N(mu_n, sigma^2 * (precision_n)^(-1)), notice that we still depend on the unknown sigma^2
     precision_n = xTx + prior_precision
-    inv_prec_n = t.inverse(precision_n)
+    # inv_prec_n = t.inverse(precision_n)
     # mu_n = inv_prec_n @ (xTx @ beta + prior_precision @ prior_mu)
-    mu_n = inv_prec_n @ (data_x.T @ data_y + prior_precision @ prior_mu)
+    # mu_n = inv_prec_n @ (data_x.T @ data_y + prior_precision @ prior_mu)
+    # faster way:
+    mu_n = t.linalg.solve(precision_n, (data_x.T @ data_y + prior_precision @ prior_mu))
+
 
     # ==============================
     # this is the posterior covariance, not yet scaled by sigma
     # we need to find A such that A dot A^T = cov_n
     # to do this we find the eigenvectors and values of cov_n, and take the sqrt
     # of the eigenvalues
-    L, Q = t.linalg.eigh(inv_prec_n)
-    cov_n_sqrt = t.sqrt(L) * Q
+    L, Q = t.linalg.eigh(precision_n)
+    cov_n_sqrt = 1.0/t.sqrt(L) * Q
     # not that here we have cov_n = cov_n_sqrt @ cov_n_sqrt.T
+
+    # instead, compute the eigenvalues of precision_n and just invert them
 
     # ==========================================================================
     # computing posterior p(sigma^2| X, y), which is an Inv-Normal distribution
