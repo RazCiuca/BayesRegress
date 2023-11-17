@@ -2,7 +2,6 @@
 This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
-todo: fix bug where bayesian regression is not commutative in the dataset
 todo: test differentiability of everything
 todo: test infogain routine that computes entropy differences
 todo: write visualization functions for infogain with simple polynomials
@@ -170,7 +169,8 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
         # E[ln(X)] = ln(b) - psi(a), where psi is the digamma function
         E_ln_sigma_2 = t.log(b_n) - t.digamma(a_n)
 
-        H_beta_given_sigma_2 = 0.5 * (t.sum(t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+        H_beta_given_sigma_2 = 0.5 * (t.sum(-t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+        # H_beta_given_sigma_2 = 0.5 * (-t.logdet(precision_n) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
 
         return H_beta_given_sigma_2 + H_sigma_2
 
@@ -245,7 +245,7 @@ def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
     raise NotImplemented
 
 
-if __name__ == "__main__2":
+if __name__ == "__main__":
 
     data_noise = 0.5
 
@@ -274,7 +274,7 @@ if __name__ == "__main__2":
     print(infogain)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__2":
     # consistency checking of bayesian computation:
     # updating in two steps over data should be equivalent to updating in one step
 
