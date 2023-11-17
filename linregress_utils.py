@@ -14,6 +14,7 @@ todo: use t.linalg.solve(A,B) instead of A.inverse() @ B, it's faster and more s
 """
 import torch as t
 import numpy as np
+import matplotlib.pyplot as plt
 
 def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Tensor([0.1]), b_0=t.Tensor([1])):
     """
@@ -41,9 +42,6 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
     x_dim = data_x.size(1)
     n_data = data_x.size(0)
 
-    # MLE for the parameters
-    beta = t.linalg.pinv(data_x) @ data_y
-
     # quantity used in further computations
     xTx = data_x.T @ data_x
 
@@ -51,23 +49,20 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
     # these are the posterior parameters for p(beta|sigma^2, X, y)
     # this distribution is N(mu_n, sigma^2 * (precision_n)^(-1)), notice that we still depend on the unknown sigma^2
     precision_n = xTx + prior_precision
-    # inv_prec_n = t.inverse(precision_n)
-    # mu_n = inv_prec_n @ (xTx @ beta + prior_precision @ prior_mu)
-    # mu_n = inv_prec_n @ (data_x.T @ data_y + prior_precision @ prior_mu)
-    # faster way:
-    mu_n = t.linalg.solve(precision_n, (data_x.T @ data_y + prior_precision @ prior_mu))
 
+    # We now use linalg.solve to compute A.inverse() @ B more reliably
+    # this is the posterior mean for the parameters
+    mu_n = t.linalg.solve(precision_n, (data_x.T @ data_y + prior_precision @ prior_mu))
 
     # ==============================
     # this is the posterior covariance, not yet scaled by sigma
-    # we need to find A such that A dot A^T = cov_n
-    # to do this we find the eigenvectors and values of cov_n, and take the sqrt
-    # of the eigenvalues
+    # we need to find A such that A dot A^T = cov_n = precision_n.inverse()
+    # to do this we find the eigenvectors and values of precision_n, invert the eigenvalues
+    # and take their square root, and we're done.
     L, Q = t.linalg.eigh(precision_n)
     cov_n_sqrt = 1.0/t.sqrt(L) * Q
     # not that here we have cov_n = cov_n_sqrt @ cov_n_sqrt.T
-
-    # instead, compute the eigenvalues of precision_n and just invert them
+    # we need this quantity to be able to sample from the gaussian differentiably
 
     # ==========================================================================
     # computing posterior p(sigma^2| X, y), which is an Inv-Normal distribution
@@ -91,7 +86,6 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
 
     # ==========================================================================
     # computing P(data | model) = int P(data | beta, model) P(beta|model)
-    # see
 
     log_model_evidence = x_dim/2 * t.log(t.Tensor([2*np.pi]))
     # this is computing log( sqrt(det(precision_0)/det(precision_n)) )
@@ -101,10 +95,10 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
     log_model_evidence -= a_n * t.log(b_n)
     log_model_evidence += t.lgamma(a_n) - t.lgamma(t.Tensor([a_0]))
 
-
     # this function samples parameters from the posterior in a differentiable manner
     # with the reparametrization trick
     def sampling_fn(n_samples):
+        # need to also return the sigmas for those samples
 
         # first sample from a Gamma, then invert it, then scale it
         gamma_samples = gamma_dist.sample(t.Size([n_samples]))
@@ -123,7 +117,7 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
         samples = mu_n.unsqueeze(0) + (( sigma_samples * unit_normal_samples) @ cov_n_sqrt.T)
 
         # samples have shape [n_samples, data_x.size(0)]
-        return samples
+        return samples, sigma_samples
 
     # samples the model to give predictions with error bars, both on in a differentiable
     # manner, given data at which you want to predict, and a given precision level
@@ -138,13 +132,16 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
         """
 
         # generate n_samples from the posterior:
-        betas = sampling_fn(n_samples)
+        betas, sigmas = sampling_fn(n_samples)
 
         # predict using each sample at all points
         # this is now size(n_data, n_samples)
         preds = apply_and_concat(predict_data_x, fns) @ betas.T
 
-        return preds.mean(dim=1), preds.std(dim=1)
+        # need to add the samples in quadrature to get the real variance of the output
+
+        # return preds.mean(dim=1), t.sqrt(preds.var(dim=1) + t.mean(sigmas**2))
+        return preds.mean(dim=1), t.sqrt(preds.var(dim=1) + b_n/(a_n-1))
 
     # computes the entropy of the posterior in a differentiable manner
     def entropy_fn():
@@ -156,21 +153,21 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
 
         # ======================================================================
         # entropy of the distribution for sigma^2, this is the entropy of an Inv-Gamma distribution
-        # H(Y) = a_n + t.log(b_n) + t.log(gamma(a_n)) - (1-a_n) * digamma(a_n)
-        H_sigma_2 = a_n + t.log(b_n) + t.lgamma(a_n) - (1-a_n)*t.digamma(a_n)
+        # H(Y) = a_n + t.log(b_n) + t.log(gamma(a_n)) - (1+a_n) * digamma(a_n)
+        H_sigma_2 = a_n + t.log(b_n) + t.lgamma(a_n) - (1+a_n)*t.digamma(a_n)
 
         # ======================================================================
         # entropy of the conditional distribution
         # H(beta|sigma^2) = 0.5 ln det (2*pi*e * Cov)
         # but Cov = sigma^2 * inv_prec_n, and we already know the eigenvalues for that
-        # so det (2*pi*e * Cov) = (2*pi*e * sigma^2)**dim * prod(L)
+        # so det (2*pi*e * Cov) = (2*pi*e * sigma^2)**dim / prod(L)
         # ln of this will give dim * ln (2*pi*e * sigma^2) + sum(ln(L))
         # so we need E[ln(X)] where X ~ inv-gamma(a,b), this is equal to
         # E[ln(X)] = ln(b) - psi(a), where psi is the digamma function
         E_ln_sigma_2 = t.log(b_n) - t.digamma(a_n)
 
-        H_beta_given_sigma_2 = 0.5 * (t.sum(-t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
-        # H_beta_given_sigma_2 = 0.5 * (-t.logdet(precision_n) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+        # H_beta_given_sigma_2 = 0.5 * (t.sum(-t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+        H_beta_given_sigma_2 = 0.5 * (-t.logdet(precision_n) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
 
         return H_beta_given_sigma_2 + H_sigma_2
 
@@ -226,8 +223,6 @@ def infogain_bayesian_regress(regress_dict, new_x, n_samples=100):
                           a_0=regress_dict['a_n'],
                           b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
 
-    print(t.cat(entropy_samples))
-
     return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
 
 def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
@@ -245,20 +240,51 @@ def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
     raise NotImplemented
 
 
+
+# testing prediction
+if __name__ == "__main__0":
+    data_noise = 0.2
+
+    coefs = t.randn(3)
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x: x ** 2]
+    size_x = len(fns)
+
+    data_x = t.arange(-1, 1, 0.01).unsqueeze(1)
+    data_y = coefs[0] + coefs[1] * data_x + coefs[2] * data_x ** 2
+    data_y += t.randn(data_y.size()) * data_noise
+    data_y = t.squeeze(data_y)
+
+    sol_dict = bayesian_regression(data_x, data_y, fns,
+                                   prior_mu=t.zeros(size_x),
+                                   prior_precision=1e-7 * t.eye(size_x, size_x))
+
+    predict_y_mean, predict_y_std = sol_dict['predict_fn'](data_x, n_samples=1000)
+
+    print(predict_y_mean.size())
+
+    plt.scatter(data_x.squeeze().numpy(), data_y.numpy())
+    plt.plot(data_x.squeeze().numpy(), predict_y_mean.numpy(), color='red')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean + 1*predict_y_std).numpy(), color='blue')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean - 1*predict_y_std).numpy(), color='blue')
+
+    plt.show()
+
+# testing infogain
 if __name__ == "__main__":
 
-    data_noise = 0.5
+    data_noise = 0.05
 
     coefs = t.randn(3)
 
     fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x:x**2]
 
-    data_x = t.arange(0, 10, 0.1).unsqueeze(1)
+    data_x = t.arange(-5, 5, 0.1).unsqueeze(1)
     data_y = coefs[0] + coefs[1]*data_x + coefs[2]*data_x**2
     data_y += t.randn(data_y.size())*data_noise
     data_y = t.squeeze(data_y)
 
-    data_infogain = 10*t.rand(1,1)
+    data_infogain = 1*t.rand(1,1)
 
     print(data_x.size())
     size_x = len(fns)
@@ -274,17 +300,19 @@ if __name__ == "__main__":
     print(infogain)
 
 
+
+
 if __name__ == "__main__2":
     # consistency checking of bayesian computation:
     # updating in two steps over data should be equivalent to updating in one step
 
-    data_noise = 0.5
+    data_noise = 0.1
 
     coefs = t.randn(3)
 
     fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x: x ** 2]
 
-    data_x = t.arange(0, 10, 0.1).unsqueeze(1)
+    data_x = t.arange(0, 1, 0.05).unsqueeze(1)
     data_y = coefs[0] + coefs[1] * data_x + coefs[2] * data_x ** 2
     data_y += t.randn(data_y.size()) * data_noise
     data_y = t.squeeze(data_y)
@@ -319,7 +347,9 @@ if __name__ == "__main__2":
     print(sol_dict)
     print(sol_dict_1)
     # print(sol_dict_3)
-
+    print(sol_dict['entropy_fn']())
+    print(sol_dict_1['entropy_fn']())
+    print(sol_dict_3['entropy_fn']())
 
 
 
