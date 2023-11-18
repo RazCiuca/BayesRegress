@@ -1,0 +1,42 @@
+
+- (done) code bayesian linear regression
+- (done) update the linear regression for multiple outputs variables y simultaneously
+- (done) test multiple simultaneous regression with two easy functions
+
+- Project: model-based to q-value estimation
+    - use bayesian regression to fit a quadratic model from state-action to next-state-reward pairs
+    - use samples from the model posterior to fit q-value-functions
+    - set the optimisation goal of the network to be the expected td-error under those fitted-q-values
+    - use infogain in the following manner: the optimal action is the one with the highest expected q-value,
+        but set a given radius around that action in which you optimise for information gain on the posterior
+        of the model.
+
+    functions to write:
+    fit_model(states, actions, next_states, rewards)
+        -> fits a differentiable bayesian model to predict next_states, rewards from states, actions
+    q_func_from_model(states, actions, model_param)
+        -> takes a given linear/quadratic model for predicting next_states and rewards, and fits a q-value function to it differentiably
+        -> the q-value function for a given model parameter will also have a posterior distribution, since a quadratic q-value function
+            can't exactly solve quadratic dynamics.
+    expected_q_value(actions)
+        -> computes the expected q-value of an action under the model distribution
+    infogain_model(current_action, radius)
+        -> find the action which maximizes the bayesian information gain under a given radius away from current (optimal) action
+        -> needs to search over the space of actions, and for each action, predict the possible outcomes (both in states and rewards)
+            then imagine adding them to the dataset and see how the entropy changes
+    solve_infogain_mdp()
+        -> given the space of actions, the infogain of an action is now the reward of a new mdp with dynamics given
+            by our model space, and we can plan to take the sequence of actions to maximize our reward
+        -> learn a new q-function for this new mdp by sampling datapoints
+        -> we can possibly learn from a mix of the true reward and the infogain, overtime the infogain gets smaller and smaller
+        -> what's the expected change in the q-value from an infogain?
+
+    there are a few ways of using information here, we could do the simple trust-region-infogain thing, or we can do
+    more complicated versions related to exploring states in order to better explore. In this sense the infogain of an
+    action is really now the reward, and initially we must find a policy to solve that space.
+
+
+
+    todo: mujoco from state space, possibly mujoco from images?
+
+

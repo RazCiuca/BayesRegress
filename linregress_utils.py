@@ -2,9 +2,6 @@
 This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
-todo: test differentiability of everything
-todo: test infogain routine that computes entropy differences
-todo: write visualization functions for infogain with simple polynomials
 todo: write optim routine to return the optimal state to explore for infogain
 todo: write regression function for arbitrary numbers of hypotheses
 todo : unit tests to make sure all works
@@ -61,7 +58,7 @@ def bayesian_regression(data_x, data_y, fns, prior_mu, prior_precision, a_0=t.Te
     # and take their square root, and we're done.
     L, Q = t.linalg.eigh(precision_n)
     cov_n_sqrt = 1.0/t.sqrt(L) * Q
-    # not that here we have cov_n = cov_n_sqrt @ cov_n_sqrt.T
+    # note that here we have cov_n = cov_n_sqrt @ cov_n_sqrt.T
     # we need this quantity to be able to sample from the gaussian differentiably
 
     # ==========================================================================
@@ -225,7 +222,7 @@ def infogain_bayesian_regress(regress_dict, new_x, n_samples=100):
 
     return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
 
-def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
+def bayesian_regression_auto_var_selection(data_x, data_y, fns):
     """
     we do bayesian regression over the parameter of each of the hypotheses
     when we predict, we average over the likelihood of all hypotheses
@@ -234,9 +231,29 @@ def bayesian_regression_hypotheses(data_x, data_y, hypotheses):
 
     :param data_x: tensor(n_data, size_x)
     :param data_y: tensor(n_data)
-    :param hypotheses: list of list of size_x -> 1 functions
+    :param fns: list of list of size_x -> 1 functions
     :return:
     """
+
+    # Step 1: explicitly define the gradients of p(y|m, gamma_i), the data likelihood given the model and the prior
+    # log diagonal elements of the prior. Also assume that mu_0 = 0, by symmetry.
+
+    # use autograd to define the hessian for our likelihood.
+
+    # use newton iteration to find the MAP, then use laplace approximation with the hessian
+
+    # to predict, we sample a bunch of priors from the likelihood, then we fit bayesian regressions with those priors,
+    # and we average out all predictions using importance sampling.
+
+    # the full entropy of the model will be the average entropy of sampled models plus the entropy of our prior
+    # MVN distribution
+
+    # can again define infogain here, again by monte-carlo simulation
+
+    # the whole thing needs to be differentiable. so that we can take derivatives
+
+    # to update, keep the population samples for the various priors, and update each regression model with the new data.
+
     raise NotImplemented
 
 
@@ -271,7 +288,7 @@ if __name__ == "__main__0":
     plt.show()
 
 # testing infogain
-if __name__ == "__main__":
+if __name__ == "__main__1":
 
     data_noise = 0.05
 
@@ -299,6 +316,37 @@ if __name__ == "__main__":
     print(sol_dict)
     print(infogain)
 
+
+# testing differentiability
+if __name__ == "__main__":
+
+    data_noise = 0.05
+
+    coefs = t.randn(3)
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x:x**2]
+
+    data_x = t.arange(-5, 5, 0.1).unsqueeze(1)
+    data_y = coefs[0] + coefs[1]*data_x + coefs[2]*data_x**2
+    data_y += t.randn(data_y.size())*data_noise
+    data_y = t.squeeze(data_y)
+
+    data_x.requires_grad = True
+    data_y.requires_grad = True
+
+    data_infogain = 1*t.rand(1,1)
+
+    print(data_x.size())
+    size_x = len(fns)
+
+    sol_dict = bayesian_regression(data_x, data_y, fns,
+                                   prior_mu=t.zeros(size_x),
+                                   prior_precision=1e-7*t.eye(size_x,size_x))
+
+    entropy = sol_dict['entropy_fn']()
+    entropy.backward()
+
+    print(data_y.grad)
 
 
 

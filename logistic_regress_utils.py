@@ -35,8 +35,8 @@ def bayesian_logistic_regression(data_x, data_y, n_cat, fns, prior_mu, prior_pre
     :param data_y: LongTensor(n_data), categories
     :param n_cat : integer, number of categories
     :param fns: list of functions to use for fitting
-    :param prior_mu: tensor(len(fns)), prior mean for the parameters
-    :param prior_precision: tensor(len(fns), len(fns)), prior precision for the parameters
+    :param prior_mu: tensor(n_cat, len(fns)), prior mean for the parameters
+    :param prior_precision: tensor(n_cat, len(fns), len(fns)), prior precision for the parameters
     :return: dict with the following fields: 'fns', 'mu_n', 'lambda_n', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
     """
 
@@ -61,16 +61,22 @@ def bayesian_logistic_regression(data_x, data_y, n_cat, fns, prior_mu, prior_pre
     step_norm = t.inf
     epsilon = 1e-2
 
-    with t.no_grad:
+    # todo: incorporate a prior gaussian in the optimisation, so we can do infogain on single examples in general
+
+    with (t.no_grad):
         while step_norm > epsilon:
             # shape [n_data, n_cat]
             mu = t.sigmoid(data_x @ w.T)
             # shape [dim_x, n_cat]
             gradient = data_x.T @ (mu - data_y)
 
+            # adding the prior component to the gradient
+            # todo: check the sign here, are we optimising negative log-likelihood?
+            gradient += prior_precision @ (w - prior_mu)
+
             # we're doing a sum over a tensor with dim [n_data, n_cat, dim_x, dim_x]
             # and keeping only the last 3 dimensions [n_cat, dim_x, dim_x]
-            hessian = t.einsum("nk, ni, nj -> kij", mu*(1-mu), data_x, data_x)
+            hessian = prior_precision + t.einsum("nk, ni, nj -> kij", mu*(1-mu), data_x, data_x)
 
             # now compute the newton step update
             # step has shape [n_cat, dim_x]
