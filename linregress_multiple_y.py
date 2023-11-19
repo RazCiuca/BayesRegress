@@ -3,6 +3,157 @@ import torch as t
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+def log_model_evidence(precision_0, precision_n, a_0, a_n, b_0, b_n):
+    """
+    computes the log of the model evidence for a bayesian linear regression model given
+    the prior and posterior parameters
+    """
+    x_dim = precision_0.size(-1)
+    y_dim = precision_n.size(0)
+
+    log_model_evidence = x_dim / 2 * t.log(t.ones(y_dim) * 2 * np.pi)
+    log_model_evidence += 0.5 * (t.logdet(precision_0) - t.logdet(precision_n))
+    log_model_evidence += a_0 * t.log(b_0)
+    log_model_evidence -= a_n * t.log(b_n)
+    log_model_evidence += t.lgamma(a_n) - t.lgamma(a_0)
+
+    # has shape [y_dim], for the model evidence for each dimension of y
+    return log_model_evidence
+
+def get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None):
+    """
+    computes the gradient of the model evidence for each y dimension with respect to gamma, which are the
+    log diagonal parameters of precision_0, i.e. precision_0 = t.diag(t.exp(gamma))
+    and also with respect to a_0 and b_0
+    """
+
+    x_dim = data_x.size(1)
+    y_dim = data_y.size(1)
+
+    mu_0 = t.zeros(y_dim, x_dim)
+    precision_0 = t.diag_embed(t.exp(gamma))
+
+    # useful term that remains constant through computation of all gradients
+    xTx = data_x.T @ data_x if x_at_x is None else x_at_x
+    yTx = data_y.T @ data_x if y_at_x is None else y_at_x
+    yTy = t.sum(data_y ** 2, dim=0) if y_2_sum is None else y_2_sum
+
+    mu_n, precision_n, a_n, b_n = get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
+                                                                  y_at_x=yTx, x_at_x=xTx, y_2_sum=yTy)
+
+    # inverse of each precision matrix
+    # shape [y_dim, x_dim, x_dim]
+    inv_prec_n = precision_n.inverse()
+
+    # =========================================
+    # derivative computation for gamma
+    # =========================================
+
+    # shape [y_dim, x_dim], intermediate term in the computation
+    z = t.einsum("ij, ilj -> il ", yTx, inv_prec_n)
+
+    gamma_grad = 0.5 * t.ones(y_dim, x_dim)
+    gamma_grad -= 0.5 * t.exp(gamma) * t.diagonal(inv_prec_n, dim1=1, dim2=2)
+    gamma_grad -= (a_n / (2 * b_n)).unsqueeze(1) * (z ** 2 * t.exp(gamma))
+
+    # =========================================
+    # derivative computation for a_0
+    # =========================================
+    a_0_grad = t.log(b_0) - t.log(b_n)
+    a_0_grad += t.digamma(a_n) - t.digamma(a_0)
+
+    # =========================================
+    # derivative computation for b_0
+    # =========================================
+    b_0_grad = a_0 / b_0 - a_n / b_n
+
+    return gamma_grad, a_0_grad, b_0_grad
+
+
+def get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None):
+    """
+
+    :param data_x: Tensor(n_data, size_x)
+    :param data_y: ensor(n_data, size_y)
+    :param mu_0: Tensor(size_y, size_x), the prior mean
+    :param precision_0: Tensor(size_y, size_x, size_x) , prior precision matrix for the MVN
+    :param a_0: Tensor(size_y) prior parameter for Inv-Normal distribution over the noise level sigma^2
+    :param b_0, Tensor(size_y) prior parameter for Inv-Normal distribution over the noise level sigma^2
+    :return: mu_n, precision_n, a_n, b_n   all tensors with same shapes as the equivalent priors
+    """
+
+    n_data = data_x.size(0)
+
+    # quantity used in further computations
+    xTx = data_x.T @ data_x if x_at_x is None else x_at_x
+    yTx = data_y.T @ data_x if y_at_x is None else y_at_x
+    yTy = t.sum(data_y ** 2, dim=0) if y_2_sum is None else y_2_sum
+
+    precision_n = xTx.unsqueeze(0) + precision_0
+
+    prior_prec_times_mu = t.einsum('kij, kj -> ki', precision_0, mu_0)
+    mu_n = t.linalg.solve(precision_n, (yTx + prior_prec_times_mu))
+
+    term_0 = yTy
+    term_1 = t.einsum('ki, kij, kj -> k', mu_0, precision_0, mu_0)
+    term_2 = - t.einsum('ki, kij, kj -> k', mu_n, precision_n, mu_n)
+
+    # these are the posterior parameters for the sigma^2 side of the posterior
+    a_n = a_0 + n_data / 2
+    b_n = b_0 + 0.5 * (term_0 + term_1 + term_2)
+
+    return mu_n, precision_n, a_n, b_n
+
+
+def get_MLE_prior_params(data_x, data_y, fns):
+    """
+    This function does gradient descent on the parameters for the bayesian regression priors to find
+    the model which maximises P(Data | model)
+
+    We assume that mu_0 = 0 and that the prior has the form precision_0 = diag(exp(gamma_i))
+    and we optimise the data likelihood with respect to gamma_i , a_0 and b_0
+
+    Here we are manually differentiating log(p(y|m))
+
+    """
+    data_x = apply_and_concat(data_x, fns)
+    x_dim = data_x.size(1)
+    y_dim = data_y.size(1)
+
+    n_iter = 50
+    lr = 0.1
+
+    # this is the thing we are optimising
+    gamma = t.zeros(y_dim, x_dim)
+
+    mu_0 = t.zeros(y_dim, x_dim)
+    precision_0 = t.diag_embed(t.exp(gamma))
+    a_0 = 0.1 * t.ones(y_dim)
+    b_0 = t.ones(y_dim)
+
+    # useful term that remains constant through computation of all gradients
+    y_at_x = data_y.T @ data_x
+    x_at_x = data_x.T @ data_x
+    y_2_sum = t.sum(data_y ** 2, dim=0)
+
+    with t.no_grad:
+
+        for i in range(n_iter):
+            gamma_grad, a_0_grad, b_0_grad = get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0,
+                                                                         y_at_x=y_at_x, x_at_x=x_at_x, y_2_sum=y_2_sum)
+
+            gamma += lr*gamma_grad
+            b_0 += lr*b_0_grad
+            a_0 += lr*a_0_grad
+
+    return mu_0, t.diag_embed(t.exp(gamma)), a_0, b_0
+
+def test_log_model_evidence_grad():
+    raise NotImplemented
+
+
+
 def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0, b_0):
     """
     :param data_x: Tensor(n_data, size_x)
@@ -187,6 +338,7 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
             'log_model_ev': log_model_evidence
             }
 
+
 def tril_flatten(tril, offset=0):
     N = tril.size(-1)
     indices = t.tril_indices(N, N, offset=offset)
@@ -196,6 +348,7 @@ def tril_flatten(tril, offset=0):
 def get_flat_quadratic(x):
     """
     Given an input with shape [n_data, x_dim], return all the elements needed for quadratic regression
+    we can probably use torch.combinations to make this easier, and for including higher orders
     :param x:
     :return:
     """
@@ -205,7 +358,7 @@ def get_flat_quadratic(x):
 
     return t.cat([t.ones(n_data, 1), x, tril_flatten(cross_elements)], dim=1)
 
-def get_flat_pairwise_cos_sin(x, max_k):
+def get_flat_fourier_basis(x, max_k):
     """
     assume data will be normalised, so set the boundary to like [-pi, pi]
 
@@ -214,6 +367,10 @@ def get_flat_pairwise_cos_sin(x, max_k):
     k1 x_i + k2 x_j for each k1 = [0, 1, ... N_k] and k2=[0, 1, ..., N_l]
 
     we want to return something of shape [n_data, ]
+
+    output has (x_dim*(x_dim-1)/2 * (max_k**2 * 2 - 1)) outputs
+
+    this will include the constant term
 
     :param x:
     :return:
@@ -233,10 +390,10 @@ def get_flat_pairwise_cos_sin(x, max_k):
     linear_combinations = t.einsum("nmi, klm -> nikl", x_pairs, ks).flatten(-2)
 
     # exclude the k = 0,0 coefficients for sin
-    fourier_coefs = t.cat([t.cos(linear_combinations).flatten(-2),
+    fourier_basis= t.cat([t.cos(linear_combinations).flatten(-2),
                            t.sin(linear_combinations[:, :, 1:]).flatten(-2)], dim=1)
 
-    return fourier_coefs
+    return fourier_basis
 
 def get_flat_pairwise_radial_basis(x):
     raise NotImplemented
@@ -253,27 +410,46 @@ def apply_and_concat(x, fn_list):
 
 
 if __name__ == "__main__":
-    x = t.randn(4, 3)
-    x_dim = x.size(1)
+    # testing the gradient of the log_model_evidence
 
-    max_k = 5
+    data_x = t.randn(100, 5)
+    data_y = (data_x).sum(dim=1).unsqueeze(1).repeat(1, 2)
+    data_y += 0.1*t.randn(data_y.size())
 
-    new_x = x.unsqueeze(2).repeat(1, 1, x_dim)
+    x_dim = data_x.size(1)
+    y_dim = data_y.size(1)
 
-    # these are the pairs of combinations of x_i's, excluding pairs of the same
-    # shape [n_data, 2, x_dim*(x_dim-1)/2]
-    x_pairs = tril_flatten(t.stack([new_x, new_x.transpose(1, 2)], dim=1), offset=-1)
+    # this is the thing we are optimising
+    gamma = t.zeros(y_dim, x_dim)+3
+    gamma.requires_grad = True
 
-    ks = t.arange(0, max_k).unsqueeze(0).repeat(max_k, 1).float()
-    # now this has shape [max_k, max_k, 2]
-    ks = t.stack([ks, ks.transpose(0, 1)], dim=2)
+    mu_0 = t.zeros(y_dim, x_dim)
+    precision_0 = t.diag_embed(t.exp(gamma))
+    a_0 = 0.1 * t.ones(y_dim)
+    b_0 = t.ones(y_dim)
 
-    # shape [n_data, x_dim*(x_dim-1)/2, max_k * max_k]
-    linear_combinations = t.einsum("nmi, klm -> nikl", x_pairs, ks).flatten(-2)
+    a_0.requires_grad = True
+    b_0.requires_grad = True
 
-    # exclude the k = 0,0 coefficients for sin
-    fourier_coefs = t.cat([t.cos(linear_combinations).flatten(-2),
-                                  t.sin(linear_combinations[:, :, 1:]).flatten(-2)], dim=1)
+    # useful term that remains constant through computation of all gradients
+    y_at_x = data_y.T @ data_x
+    x_at_x = data_x.T @ data_x
+    y_2_sum = t.sum(data_y ** 2, dim=0)
+
+    mu_n, precision_n, a_n, b_n = get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
+                                                                  y_at_x=y_at_x, x_at_x=x_at_x, y_2_sum=y_2_sum)
+
+    model_evidence = t.sum(log_model_evidence(precision_0, precision_n, a_0, a_n, b_0, b_n))
+
+    model_evidence.backward()
+
+    print(gamma.grad)
+
+    # ==============================================
+
+    gamma_grad, a_0_grad, b_0_grad = get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0)
+
+    print(gamma_grad)
 
 # testing prediction
 if __name__ == "__main__0":

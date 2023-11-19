@@ -2,6 +2,12 @@
 - (done) code bayesian linear regression
 - (done) update the linear regression for multiple outputs variables y simultaneously
 - (done) test multiple simultaneous regression with two easy functions
+- finish implementing MLE estimation for the prior parameters
+    -> (done) verify that the gradients do correspond with the function
+    -> (done) make gradient computation faster by avoiding the repetition of long multiplies
+    -> implement hessian calculation for log_model_evidence
+
+- explanation doc for functions in lin_regress_multiple
 
 - Project: model-based to q-value estimation
     - use bayesian regression to fit a quadratic model from state-action to next-state-reward pairs
@@ -18,6 +24,7 @@
         -> takes a given linear/quadratic model for predicting next_states and rewards, and fits a q-value function to it differentiably
         -> the q-value function for a given model parameter will also have a posterior distribution, since a quadratic q-value function
             can't exactly solve quadratic dynamics.
+        -> in general the q-value should be more expressive than the model, you can't overfit this easily
     expected_q_value(actions)
         -> computes the expected q-value of an action under the model distribution
     infogain_model(current_action, radius)
@@ -34,6 +41,9 @@
     there are a few ways of using information here, we could do the simple trust-region-infogain thing, or we can do
     more complicated versions related to exploring states in order to better explore. In this sense the infogain of an
     action is really now the reward, and initially we must find a policy to solve that space.
+
+    - Or we can set a region of actions with an acceptable optimal-q-value, and choose among those the one
+      with the highest infogain, or choose among those the one with the highest infogain-q-value!!!
 
 
 
