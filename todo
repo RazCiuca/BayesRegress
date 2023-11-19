@@ -20,7 +20,7 @@
         of the model.
 
     functions to write:
-    fit_model(states, actions, next_states, rewards)
+    fit_dynamics_model(states, actions, next_states, rewards)
         -> fits a differentiable bayesian model to predict next_states, rewards from states, actions
     q_func_from_model(states, actions, model_param)
         -> takes a given linear/quadratic model for predicting next_states and rewards, and fits a q-value function to it differentiably

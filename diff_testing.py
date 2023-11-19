@@ -1,18 +1,18 @@
+"""
+The goal of this script is to see if the differentiability of the posterior entropy with
+respect to the initial data works.
+
+Result: it works, if we minimize the entropy of the posterior, the y-data start to cluster around values that are
+very predictable
 
 """
-The goal of this script is to show a full example of regression with a lot of basis functions, and
-show that we don't overfit. We also plot the infogain
-
-"""
-
-
-import numpy as np
 import torch as t
-import matplotlib.pyplot as plt
+import torch.optim as optim
 from linregress_multiple_y import *
+import matplotlib.pyplot as plt
+
 
 if __name__ == "__main__":
-
     data_noise = 0.4
 
     coefs_0 = t.randn(3)
@@ -27,7 +27,8 @@ if __name__ == "__main__":
     visualize_x = t.arange(-3, 3, 0.01).unsqueeze(1)
 
     data_x = t.cat([t.arange(-3, -1, 0.2).unsqueeze(1), t.arange(1, 3, 0.2).unsqueeze(1)], dim=0)
-    data_y_0 = coefs_0[0] + coefs_0[1] * data_x + coefs_0[2] * data_x ** 2 # + t.sin(2*data_x)
+
+    data_y_0 = coefs_0[0] + coefs_0[1] * data_x + coefs_0[2] * data_x ** 2  # + t.sin(2*data_x)
     data_y_0 += t.randn(data_y_0.size()) * data_noise
     data_y_0 = data_y_0.reshape(-1, 1)
 
@@ -42,26 +43,49 @@ if __name__ == "__main__":
 
     mu_0, precision_0, a_0, b_0 = get_MLE_prior_params(apply_and_concat(data_x, fns), data_y, verbose=True)
 
+    data_x.requires_grad = True
+    data_y_0.requires_grad = True
+    data_y_1.requires_grad = True
+    optimizer = optim.SGD([data_y_0, data_y_1], lr=0.01)
 
-    sol_dict = bayes_regress_multiple_y(data_x, data_y, fns,
-                                        prior_mu=mu_0,
-                                        prior_precision=precision_0,
-                                        a_0=a_0,
-                                        b_0=b_0)
+    n_iter = 1000
+
+    for i in range(0, n_iter):
+
+        optimizer.zero_grad()
+
+        data_y = t.cat([data_y_0, data_y_1], dim=1)
+
+        sol_dict = bayes_regress_multiple_y(data_x, data_y, fns,
+                                            prior_mu=mu_0,
+                                            prior_precision=precision_0,
+                                            a_0=a_0,
+                                            b_0=b_0)
+
+        entropy = t.sum(sol_dict['entropy_fn']())
+
+        entropy.backward()
+
+        optimizer.step()
+
+        print(f"{i}-- entropy:{entropy.item()}, grad norm: {data_x.grad.norm().item()}")
+
 
     predict_y_mean, predict_y_std = sol_dict['predict_fn'](visualize_x, n_samples=1000)
 
+    data_y_0 = data_y_0.detach()
+    data_y_1 = data_y_1.detach()
 
-    predict_y_mean_0 = predict_y_mean[:, 0]
-    predict_y_std_0 = predict_y_std[:, 0]
+    predict_y_mean_0 = predict_y_mean[:, 0].detach()
+    predict_y_std_0 = predict_y_std[:, 0].detach()
 
-    predict_y_mean_1 = predict_y_mean[:, 1]
-    predict_y_std_1 = predict_y_std[:, 1]
+    predict_y_mean_1 = predict_y_mean[:, 1].detach()
+    predict_y_std_1 = predict_y_std[:, 1].detach()
 
     print(predict_y_mean.size())
 
-    plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy())
-    plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy())
+    plt.scatter(data_x.detach().squeeze().numpy(), data_y_0.numpy())
+    plt.scatter(data_x.detach().squeeze().numpy(), data_y_1.numpy())
 
     plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_0.numpy(), color='red')
     plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 + 1 * predict_y_std_0).numpy(), color='blue')

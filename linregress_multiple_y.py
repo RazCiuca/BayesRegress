@@ -109,7 +109,7 @@ def get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
     return mu_n, precision_n, a_n, b_n
 
 
-def get_MLE_prior_params(data_x, data_y, eps_norm=1e-5, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
+def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
     """
     This function does gradient descent on the parameters for the bayesian regression priors to find
     the model which maximises P(Data | model)
@@ -123,9 +123,9 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-5, init_gamma=None, init_b_
     x_dim = data_x.size(1)
     y_dim = data_y.size(1)
 
-    n_iter = 500
-    lr_gamma = 0.1
-    lr_b_0 = 1e-4
+    n_iter = 5000
+    lr_gamma = 1e-2
+    lr_b_0 = 1e-3
     lr_a_0 = 0.01
 
     # this is the thing we are optimising
@@ -151,7 +151,16 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-5, init_gamma=None, init_b_
             b_0 += lr_b_0*b_0_grad
             a_0 += lr_a_0*a_0_grad
 
-            if gamma_grad.norm().item() < eps_norm:
+            if gamma_grad.norm() < 1:
+                lr_gamma = 0.1
+
+            if b_0_grad.norm() < 1:
+                lr_b_0 = 5e-2
+
+            if a_0_grad.norm() < 1:
+                lr_a_0 = 0.1
+
+            if gamma_grad.norm().item() < eps_norm and b_0_grad.norm() < eps_norm and a_0_grad.norm() < eps_norm:
                 break
 
             if verbose:
@@ -294,7 +303,7 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
         :param n_samples: int
         :return: ave_pred : tensor(n_data, y_dim), std_pred : tensor(n_data, y_dim)
         """
-
+        n_data = predict_data_x.size(0)
         # generate n_samples from the posterior:
         betas, sigmas = sampling_fn(n_samples)
         assert betas.size() == t.Size([n_samples, y_dim, x_dim])
@@ -350,7 +359,8 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
             }
 
 
-def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_samples=100):
+# todo: finish this function
+def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_entropy_samples=100):
     """
     We compute the expected decrease in the entropy of the posterior of bayesian regression
     if we add a new sample new_x to the dataset
@@ -366,7 +376,7 @@ def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_samples=100):
     new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=1000)
 
     # now we sample a bunch of outcomes for new_x, in a differentiable way
-    simulated_y_at_new_x = new_x_preds_std * t.randn(n_samples) + new_x_preds_mean
+    simulated_y_at_new_x = new_x_preds_std * t.randn(n_entropy_samples, new_x_preds_std.size(1)) + new_x_preds_mean
 
     # then using the posterior as the prior, do bayesian regression using only
     # new_x as data with the various predicted data,
@@ -376,7 +386,7 @@ def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_samples=100):
                           prior_mu=regress_dict['mu_n'],
                           prior_precision=regress_dict['precision_n'],
                           a_0=regress_dict['a_n'],
-                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
+                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_entropy_samples)]
 
     return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
 
@@ -402,6 +412,18 @@ def get_flat_quadratic(x):
     cross_elements = t.einsum('ni, nj -> nij', x, x)
 
     return t.cat([t.ones(n_data, 1), x, tril_flatten(cross_elements)], dim=1)
+
+def get_flat_polynomials(x, degree):
+
+    answer = []
+
+    z = t.ones(x.size(0), 1)
+    answer.append(z)
+    for i in range(0, degree):
+        z = t.einsum('bi, bj -> bij', z, x).flatten(-2)
+        answer.append(z)
+
+    return t.cat(answer, dim=1)
 
 def get_flat_fourier_basis(x, max_k):
     """
