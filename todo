@@ -2,11 +2,13 @@
 - (done) code bayesian linear regression
 - (done) update the linear regression for multiple outputs variables y simultaneously
 - (done) test multiple simultaneous regression with two easy functions
-- finish implementing MLE estimation for the prior parameters
+- (done) finish implementing MLE estimation for the prior parameters
     -> (done) verify that the gradients do correspond with the function
     -> (done) make gradient computation faster by avoiding the repetition of long multiplies
-    -> implement hessian calculation for log_model_evidence
-
+- implement infogain for multiple regression
+- implement infogain optimisation for multiple regression
+- do regression example with prior MLE estimation and infogain
+- refactor codebase
 - explanation doc for functions in lin_regress_multiple
 
 - Project: model-based to q-value estimation

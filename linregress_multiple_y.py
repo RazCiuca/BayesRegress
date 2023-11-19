@@ -21,7 +21,7 @@ def log_model_evidence(precision_0, precision_n, a_0, a_n, b_0, b_n):
     # has shape [y_dim], for the model evidence for each dimension of y
     return log_model_evidence
 
-def get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None):
+def get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None, verbose=False):
     """
     computes the gradient of the model evidence for each y dimension with respect to gamma, which are the
     log diagonal parameters of precision_0, i.e. precision_0 = t.diag(t.exp(gamma))
@@ -41,6 +41,9 @@ def get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_
 
     mu_n, precision_n, a_n, b_n = get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
                                                                   y_at_x=yTx, x_at_x=xTx, y_2_sum=yTy)
+
+    if verbose:
+        print(f"model evidence: {log_model_evidence(precision_0, precision_n, a_0, a_n, b_0, b_n).sum().item()}")
 
     # inverse of each precision matrix
     # shape [y_dim, x_dim, x_dim]
@@ -106,7 +109,7 @@ def get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
     return mu_n, precision_n, a_n, b_n
 
 
-def get_MLE_prior_params(data_x, data_y, fns):
+def get_MLE_prior_params(data_x, data_y, eps_norm=1e-5, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
     """
     This function does gradient descent on the parameters for the bayesian regression priors to find
     the model which maximises P(Data | model)
@@ -117,35 +120,43 @@ def get_MLE_prior_params(data_x, data_y, fns):
     Here we are manually differentiating log(p(y|m))
 
     """
-    data_x = apply_and_concat(data_x, fns)
     x_dim = data_x.size(1)
     y_dim = data_y.size(1)
 
-    n_iter = 50
-    lr = 0.1
+    n_iter = 500
+    lr_gamma = 0.1
+    lr_b_0 = 1e-4
+    lr_a_0 = 0.01
 
     # this is the thing we are optimising
-    gamma = t.zeros(y_dim, x_dim)
+    gamma = t.zeros(y_dim, x_dim) if init_gamma is None else init_gamma
 
     mu_0 = t.zeros(y_dim, x_dim)
-    precision_0 = t.diag_embed(t.exp(gamma))
-    a_0 = 0.1 * t.ones(y_dim)
-    b_0 = t.ones(y_dim)
+    a_0 = 0.1 * t.ones(y_dim) if init_a_0 is None else init_a_0
+    b_0 = t.ones(y_dim) if init_b_0 is None else init_b_0
 
     # useful term that remains constant through computation of all gradients
     y_at_x = data_y.T @ data_x
     x_at_x = data_x.T @ data_x
     y_2_sum = t.sum(data_y ** 2, dim=0)
 
-    with t.no_grad:
+    with t.no_grad():
 
         for i in range(n_iter):
             gamma_grad, a_0_grad, b_0_grad = get_log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0,
-                                                                         y_at_x=y_at_x, x_at_x=x_at_x, y_2_sum=y_2_sum)
+                                                                         y_at_x=y_at_x, x_at_x=x_at_x, y_2_sum=y_2_sum,
+                                                                         verbose=verbose)
 
-            gamma += lr*gamma_grad
-            b_0 += lr*b_0_grad
-            a_0 += lr*a_0_grad
+            gamma += lr_gamma*gamma_grad
+            b_0 += lr_b_0*b_0_grad
+            a_0 += lr_a_0*a_0_grad
+
+            if gamma_grad.norm().item() < eps_norm:
+                break
+
+            if verbose:
+                print(f"{i}: gamma grad norm: {gamma_grad.norm().item()}, b_0 norm: {b_0_grad.norm().item()}, a_0 norm: {a_0_grad.norm().item()}")
+            # print(gamma, a_0, b_0)
 
     return mu_0, t.diag_embed(t.exp(gamma)), a_0, b_0
 
@@ -339,6 +350,40 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
             }
 
 
+def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_samples=100):
+    """
+    We compute the expected decrease in the entropy of the posterior of bayesian regression
+    if we add a new sample new_x to the dataset
+
+    :return:
+    """
+
+    # first do bayesian regression on data_x and data_y, and compute the posterior
+
+    fn_list = regress_dict['fns']
+
+    # this gives us the mean and variance for the predictions from the posterior
+    new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=1000)
+
+    # now we sample a bunch of outcomes for new_x, in a differentiable way
+    simulated_y_at_new_x = new_x_preds_std * t.randn(n_samples) + new_x_preds_mean
+
+    # then using the posterior as the prior, do bayesian regression using only
+    # new_x as data with the various predicted data,
+    # and compute the difference in entropies
+
+    entropy_samples = [ bayes_regress_multiple_y(new_x, simulated_y_at_new_x[i:i+1], fn_list,
+                          prior_mu=regress_dict['mu_n'],
+                          prior_precision=regress_dict['precision_n'],
+                          a_0=regress_dict['a_n'],
+                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_samples)]
+
+    return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
+
+
+
+
+
 def tril_flatten(tril, offset=0):
     N = tril.size(-1)
     indices = t.tril_indices(N, N, offset=offset)
@@ -410,6 +455,63 @@ def apply_and_concat(x, fn_list):
 
 
 if __name__ == "__main__":
+    data_noise = 0.1
+
+    coefs_0 = t.randn(3)
+    coefs_1 = t.randn(3)
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x: x ** 2]
+    size_x = len(fns)
+
+    data_x = t.arange(-3, 3, 0.05).unsqueeze(1)
+    data_y_0 = coefs_0[0] + coefs_0[1] * data_x + coefs_0[2] * data_x ** 2 + t.sin(2 * data_x)
+    data_y_0 += t.randn(data_y_0.size()) * data_noise
+    data_y_0 = data_y_0.reshape(-1, 1)
+
+    data_y_1 = coefs_1[0] + coefs_1[1] * data_x + coefs_1[2] * data_x ** 2
+    data_y_1 += t.randn(data_y_1.size()) * data_noise
+    data_y_1 = data_y_1.reshape(-1, 1)
+
+    data_y = t.cat([data_y_0, data_y_1], dim=1)
+
+    x_dim = data_x.size(1)
+    y_dim = data_y.size(1)
+
+    mu_0, precision_0, a_0, b_0 = get_MLE_prior_params(apply_and_concat(data_x, fns), data_y)
+
+    print(precision_0.size())
+
+    sol_dict = bayes_regress_multiple_y(data_x, data_y, fns,
+                                        prior_mu=mu_0,
+                                        prior_precision=precision_0,
+                                        a_0=a_0,
+                                        b_0=b_0)
+
+    predict_y_mean, predict_y_std = sol_dict['predict_fn'](data_x, n_samples=1000)
+
+    predict_y_mean_0 = predict_y_mean[:, 0]
+    predict_y_std_0 = predict_y_std[:, 0]
+
+    predict_y_mean_1 = predict_y_mean[:, 1]
+    predict_y_std_1 = predict_y_std[:, 1]
+
+    print(predict_y_mean.size())
+
+    plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy())
+    plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy())
+
+    plt.plot(data_x.squeeze().numpy(), predict_y_mean_0.numpy(), color='red')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean_0 + 1 * predict_y_std_0).numpy(), color='blue')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean_0 - 1 * predict_y_std_0).numpy(), color='blue')
+
+    plt.plot(data_x.squeeze().numpy(), predict_y_mean_1.numpy(), color='red')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean_1 + 1 * predict_y_std_1).numpy(), color='blue')
+    plt.plot(data_x.squeeze().numpy(), (predict_y_mean_1 - 1 * predict_y_std_1).numpy(), color='blue')
+
+    plt.show()
+
+
+if __name__ == "__main__0":
     # testing the gradient of the log_model_evidence
 
     data_x = t.randn(100, 5)
@@ -452,7 +554,7 @@ if __name__ == "__main__":
     print(gamma_grad)
 
 # testing prediction
-if __name__ == "__main__0":
+if __name__ == "__main__1":
     data_noise = 0.1
 
     coefs_0 = t.randn(3)

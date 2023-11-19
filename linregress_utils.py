@@ -222,41 +222,6 @@ def infogain_bayesian_regress(regress_dict, new_x, n_samples=100):
 
     return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
 
-def bayesian_regression_auto_var_selection(data_x, data_y, fns):
-    """
-    we do bayesian regression over the parameter of each of the hypotheses
-    when we predict, we average over the likelihood of all hypotheses
-    when we compute infogain, we compute the information gain with all
-    hypotheses too
-
-    :param data_x: tensor(n_data, size_x)
-    :param data_y: tensor(n_data)
-    :param fns: list of list of size_x -> 1 functions
-    :return:
-    """
-
-    # Step 1: explicitly define the gradients of p(y|m, gamma_i), the data likelihood given the model and the prior
-    # log diagonal elements of the prior. Also assume that mu_0 = 0, by symmetry.
-
-    # use autograd to define the hessian for our likelihood.
-
-    # use newton iteration to find the MAP, then use laplace approximation with the hessian
-
-    # to predict, we sample a bunch of priors from the likelihood, then we fit bayesian regressions with those priors,
-    # and we average out all predictions using importance sampling.
-
-    # the full entropy of the model will be the average entropy of sampled models plus the entropy of our prior
-    # MVN distribution
-
-    # can again define infogain here, again by monte-carlo simulation
-
-    # the whole thing needs to be differentiable. so that we can take derivatives
-
-    # to update, keep the population samples for the various priors, and update each regression model with the new data.
-
-    raise NotImplemented
-
-
 
 # testing prediction
 if __name__ == "__main__0":
