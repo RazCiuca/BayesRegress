@@ -49,26 +49,27 @@ if __name__ == "__main__":
                                         a_0=a_0,
                                         b_0=b_0)
 
-    predict_y_mean, predict_y_std = sol_dict['predict_fn'](visualize_x, n_samples=1000)
 
-
-    predict_y_mean_0 = predict_y_mean[:, 0]
-    predict_y_std_0 = predict_y_std[:, 0]
-
-    predict_y_mean_1 = predict_y_mean[:, 1]
-    predict_y_std_1 = predict_y_std[:, 1]
-
-    print(predict_y_mean.size())
-
-    plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy())
-    plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy())
-
-    plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_0.numpy(), color='red')
-    plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 + 1 * predict_y_std_0).numpy(), color='blue')
-    plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 - 1 * predict_y_std_0).numpy(), color='blue')
-
-    plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_1.numpy(), color='red')
-    plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_1 + 1 * predict_y_std_1).numpy(), color='blue')
-    plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_1 - 1 * predict_y_std_1).numpy(), color='blue')
-
-    plt.show()
+    # predict_y_mean, predict_y_std = sol_dict['predict_fn'](visualize_x, n_samples=1000)
+    #
+    #
+    # predict_y_mean_0 = predict_y_mean[:, 0]
+    # predict_y_std_0 = predict_y_std[:, 0]
+    #
+    # predict_y_mean_1 = predict_y_mean[:, 1]
+    # predict_y_std_1 = predict_y_std[:, 1]
+    #
+    # print(predict_y_mean.size())
+    #
+    # plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy())
+    # plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy())
+    #
+    # plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_0.numpy(), color='red')
+    # plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 + 1 * predict_y_std_0).numpy(), color='blue')
+    # plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 - 1 * predict_y_std_0).numpy(), color='blue')
+    #
+    # plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_1.numpy(), color='red')
+    # plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_1 + 1 * predict_y_std_1).numpy(), color='blue')
+    # plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_1 - 1 * predict_y_std_1).numpy(), color='blue')
+    #
+    # plt.show()

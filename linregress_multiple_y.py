@@ -224,7 +224,7 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
     # not that here we have cov_n = cov_n_sqrt @ cov_n_sqrt.T
     # we need this quantity to be able to sample from the gaussian differentiably
     L, Q = t.linalg.eigh(precision_n)
-    cov_n_sqrt = (1.0/t.sqrt(L)).unsqueeze(2) * Q
+    cov_n_sqrt = (1.0/t.sqrt(L)).unsqueeze(2) * Q.transpose(1,2)
     assert L.size() == t.Size([y_dim, x_dim])
     assert Q.size() == t.Size([y_dim, x_dim, x_dim])
     assert cov_n_sqrt.size() == t.Size([y_dim, x_dim, x_dim])
@@ -286,7 +286,7 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
 
         # generate samples with the reparametrization trick, here mu_n is differentiable,
         # sigma_samples is differentiable through b_n, and cov_n_sqrt is differentiable too
-        samples = mu_n.unsqueeze(0) + t.einsum('nk, nkj, kij -> nki', sigma_samples, unit_normal_samples, cov_n_sqrt)
+        samples = mu_n.unsqueeze(0) + t.einsum('nk, nkj, kji -> nki', sigma_samples, unit_normal_samples, cov_n_sqrt)
         assert samples.size() == t.Size([n_samples, y_dim, x_dim])
 
         # samples have shape [n_samples, y_dim, x_dim], [n_samples, y_dim]
@@ -499,7 +499,7 @@ if __name__ == "__main__":
     x_dim = data_x.size(1)
     y_dim = data_y.size(1)
 
-    mu_0, precision_0, a_0, b_0 = get_MLE_prior_params(apply_and_concat(data_x, fns), data_y)
+    mu_0, precision_0, a_0, b_0 = get_MLE_prior_params(apply_and_concat(data_x, fns), data_y, verbose=True)
 
     print(precision_0.size())
 

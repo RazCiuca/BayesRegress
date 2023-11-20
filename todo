@@ -5,6 +5,7 @@
 - (done) finish implementing MLE estimation for the prior parameters
     -> (done) verify that the gradients do correspond with the function
     -> (done) make gradient computation faster by avoiding the repetition of long multiplies
+- fix sampling bug, make a new function that accurately samples from MVN with given precision matrix and mean
 - implement infogain for multiple regression
 - implement infogain optimisation for multiple regression
 - do regression example with prior MLE estimation and infogain
