@@ -1,7 +1,7 @@
 import numpy as np
 import torch as t
 
-from linregress_multiple_y import *
+from linregress_utils import *
 
 
 def fit_dynamics_model(states, actions, next_states, rewards):

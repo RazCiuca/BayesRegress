@@ -25,9 +25,7 @@ regression, so the hessian will have size N x N, if n=100, we get N = 5051
 
 """
 
-import torch as t
-import numpy as np
-from linregress_utils import *
+from old.linregress_utils import *
 
 def bayesian_logistic_regression(data_x, data_y, n_cat, fns, prior_mu, prior_precision):
     """

@@ -8,7 +8,7 @@ very predictable
 """
 import torch as t
 import torch.optim as optim
-from linregress_multiple_y import *
+from linregress_utils import *
 import matplotlib.pyplot as plt
 
 
@@ -56,11 +56,11 @@ if __name__ == "__main__":
 
         data_y = t.cat([data_y_0, data_y_1], dim=1)
 
-        sol_dict = bayes_regress_multiple_y(data_x, data_y, fns,
-                                            prior_mu=mu_0,
-                                            prior_precision=precision_0,
-                                            a_0=a_0,
-                                            b_0=b_0)
+        sol_dict = bayesian_regression(data_x, data_y, fns,
+                                       prior_mu=mu_0,
+                                       prior_precision=precision_0,
+                                       a_0=a_0,
+                                       b_0=b_0)
 
         entropy = t.sum(sol_dict['entropy_fn']())
 

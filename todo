@@ -11,8 +11,6 @@
     -> (done) test equality with non-batched regression coefficients
     -> (done)get a batch of precision_n, a_n and b_n for batches of x's and y's
 
-- implement infogain optimisation for multiple regression
-- do regression example with prior MLE estimation and infogain
 - refactor codebase: make bayesian regression a class?
 - explanation doc for functions in lin_regress_multiple
 

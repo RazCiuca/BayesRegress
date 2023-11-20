@@ -2,7 +2,7 @@
 import numpy as np
 import torch as t
 
-from linregress_multiple_y import *
+from linregress_utils import *
 
 class InfogainQLearner:
 
