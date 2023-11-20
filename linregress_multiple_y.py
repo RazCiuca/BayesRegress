@@ -108,6 +108,84 @@ def get_posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
 
     return mu_n, precision_n, a_n, b_n
 
+def posterior_entropy(precision_n, a_n, b_n):
+    """
+    :param precision_n: shape [y_dim, x_dim, x_dim]
+    :param a_n: shape [y_dim]
+    :param b_n: shape [y_dim]
+    :return: shape [y_dim], the entropy of the posterior for each dimension
+    """
+    x_dim = precision_n.size(-1)
+
+    # H(X,Y) = H(X|Y) + H(Y)
+    # so the entropy of P(beta, sigma^2 | Data) is
+    # H(sigma^2) + H(beta | sigma^2)
+    # we know H(sigma^2) since it's inverse-gamma
+    # and we know the entropy of beta|sigma^2, which is multivariate normal
+
+    # ======================================================================
+    # entropy of the distribution for sigma^2, this is the entropy of an Inv-Gamma distribution
+    # H(Y) = a_n + t.log(b_n) + t.log(gamma(a_n)) - (1+a_n) * digamma(a_n)
+    H_sigma_2 = a_n + t.log(b_n) + t.lgamma(a_n) - (1+a_n)*t.digamma(a_n)
+
+    # ======================================================================
+    # entropy of the conditional distribution
+    # H(beta|sigma^2) = 0.5 ln det (2*pi*e * Cov)
+    # but Cov = sigma^2 * inv_prec_n, and we already know the eigenvalues for that
+    # so det (2*pi*e * Cov) = (2*pi*e * sigma^2)**dim / prod(L)
+    # ln of this will give dim * ln (2*pi*e * sigma^2) + sum(ln(L))
+    # so we need E[ln(X)] where X ~ inv-gamma(a,b), this is equal to
+    # E[ln(X)] = ln(b) - psi(a), where psi is the digamma function
+    E_ln_sigma_2 = t.log(b_n) - t.digamma(a_n)
+
+    # H_beta_given_sigma_2 = 0.5 * (t.sum(-t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+    H_beta_given_sigma_2 = 0.5 * (-t.logdet(precision_n) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
+
+    # returns with shape [y_dim], one entropy for each y dimension
+    return H_beta_given_sigma_2 + H_sigma_2
+
+def batched_regression_params(data_x, data_y, mu_0, precision_0, a_0, b_0):
+    """
+    for each data in the batch dimension of data_x and data_y, do a regression to find the posterior parameters,
+    given the same prior parameters for each batch
+    :param data_x: [batch, n_data, x_dim]
+    :param data_y: [batch, n_data, y_dim]
+    :param mu_0: [y_dim, x_dim]
+    :param precision_0: [y_dim, x_dim, x_dim]
+    :param a_0: [y_dim]
+    :param b_0: [y_dim]
+    :return: precision_n [batch, y_dim, x_dim, x_dim], mu_n [batch, y_dim, x_dim], a_0 [batch, y_dim], b_0 [batch, y_dim]
+    """
+
+    x_dim = data_x.size(2)
+    y_dim = data_y.size(2)
+    n_data = data_x.size(1)
+    batch = data_x.size(0)
+
+    xTx = t.einsum('bij, bil -> bjl', data_x, data_x)
+    yTx = t.einsum('bij, bil -> bjl', data_y, data_x)
+
+    assert xTx.size() == t.Size([batch, x_dim, x_dim])
+    assert yTx.size() == t.Size([batch, y_dim, x_dim])
+
+    # [batch, y_dim, x_dim, x_dim]
+    precision_n = xTx.unsqueeze(1) + precision_0.unsqueeze(0)
+    prior_prec_times_mu = t.einsum('kij, kj -> ki', precision_0, mu_0)
+    inv_prec_n = precision_n.inverse()
+    mu_n = t.einsum('byij, byj -> byi', inv_prec_n, (yTx + prior_prec_times_mu.unsqueeze(0)))
+
+    assert mu_n.size() == t.Size([batch, y_dim, x_dim])
+
+    term_0 = t.sum(data_y ** 2, dim=1)
+    term_1 = t.einsum('ki, kij, kj -> k', mu_0, precision_0, mu_0)
+    term_2 = - t.einsum('bki, bkij, bkj -> bk', mu_n, precision_n, mu_n)
+
+    # these are the posterior parameters for the sigma^2 side of the posterior
+    a_n = a_0 + n_data / 2
+    b_n = b_0.reshape(1, -1) + 0.5 * (term_0 + term_1.unsqueeze(0) + term_2)
+
+    return mu_n, precision_n, a_n.unsqueeze(0).repeat(batch, 1), b_n
+
 
 def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
     """
@@ -168,10 +246,6 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_
             # print(gamma, a_0, b_0)
 
     return mu_0, t.diag_embed(t.exp(gamma)), a_0, b_0
-
-def test_log_model_evidence_grad():
-    raise NotImplemented
-
 
 
 def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0, b_0):
@@ -239,7 +313,6 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
     # these are the posterior parameters for the sigma^2 side of the posterior
     a_n = a_0 + n_data/2
     b_n = b_0 + 0.5 * (term_0 + term_1 + term_2)
-    print()
     assert a_n.size() == t.Size([y_dim])
     assert b_n.size() == t.Size([y_dim])
 
@@ -343,7 +416,7 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
         # H_beta_given_sigma_2 = 0.5 * (t.sum(-t.log(L)) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
         H_beta_given_sigma_2 = 0.5 * (-t.logdet(precision_n) + x_dim * (E_ln_sigma_2 + np.log(2 * t.pi * t.e)))
 
-        # returns with shape [y_dim]
+        # returns with shape [y_dim], one entropy for each y dimension
         return H_beta_given_sigma_2 + H_sigma_2
 
     return {"fns": fns,
@@ -359,37 +432,83 @@ def bayes_regress_multiple_y(data_x, data_y, fns, prior_mu, prior_precision, a_0
             }
 
 
-# todo: finish this function
-def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_entropy_samples=100):
+def infogain_bayes_regress_multiple_y(regress_dict, new_x, n_entropy_samples=100, n_regress_samples=1000):
     """
     We compute the expected decrease in the entropy of the posterior of bayesian regression
     if we add a new sample new_x to the dataset
-
+    :param regress_dict: regression dict from a bayesian regression
+    :param new_x: shape [n, size_x_pre_expanded], the data we want to assume for infogain
     :return:
     """
 
-    # first do bayesian regression on data_x and data_y, and compute the posterior
+    n_candidate_x = new_x.size(0)
+    x_dim = new_x.size(1)
+    y_dim = regress_dict['mu_n'].size(0)
 
     fn_list = regress_dict['fns']
 
     # this gives us the mean and variance for the predictions from the posterior
-    new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=1000)
+    new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=n_regress_samples)
+    assert new_x_preds_mean.size() == t.Size([n_candidate_x, y_dim])
+    assert new_x_preds_std.size() == t.Size([n_candidate_x, y_dim])
 
     # now we sample a bunch of outcomes for new_x, in a differentiable way
-    simulated_y_at_new_x = new_x_preds_std * t.randn(n_entropy_samples, new_x_preds_std.size(1)) + new_x_preds_mean
+    # for each candidate x we sample n_entropy_samples
+    simulated_y_at_new_x = (new_x_preds_std.unsqueeze(0) * t.randn(n_entropy_samples, n_candidate_x, y_dim) +
+                            new_x_preds_mean.unsqueeze(0))
+
+    assert simulated_y_at_new_x.size() == t.Size([n_entropy_samples, n_candidate_x, y_dim])
 
     # then using the posterior as the prior, do bayesian regression using only
     # new_x as data with the various predicted data,
     # and compute the difference in entropies
 
-    entropy_samples = [ bayes_regress_multiple_y(new_x, simulated_y_at_new_x[i:i+1], fn_list,
+    entropy_samples = t.stack([ bayes_regress_multiple_y(new_x, simulated_y_at_new_x[i], fn_list,
                           prior_mu=regress_dict['mu_n'],
                           prior_precision=regress_dict['precision_n'],
                           a_0=regress_dict['a_n'],
-                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_entropy_samples)]
+                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_entropy_samples)], dim=0)
 
-    return sol_dict['entropy_fn']() - sum(entropy_samples)/len(entropy_samples)
+    return (regress_dict['entropy_fn']().sum() - t.sum(entropy_samples)/entropy_samples.size(0))
 
+def efficient_infogain_bayes_regress_multiple_y(regress_dict, new_x, n_entropy_samples=100, n_regress_samples=1000):
+    """
+    We compute the expected decrease in the entropy of the posterior of bayesian regression
+    if we add a new sample new_x to the dataset
+    :param regress_dict: regression dict from a bayesian regression
+    :param new_x: shape [n, size_x_pre_expanded], the data we want to assume for infogain
+    :return:
+    """
+
+    n_candidate_x = new_x.size(0)
+    x_dim = new_x.size(1)
+    y_dim = regress_dict['mu_n'].size(0)
+
+    fn_list = regress_dict['fns']
+
+    # this gives us the mean and variance for the predictions from the posterior
+    new_x_preds_mean, new_x_preds_std = regress_dict['predict_fn'](new_x, n_samples=n_regress_samples)
+    assert new_x_preds_mean.size() == t.Size([n_candidate_x, y_dim])
+    assert new_x_preds_std.size() == t.Size([n_candidate_x, y_dim])
+
+    # now we sample a bunch of outcomes for new_x, in a differentiable way
+    # for each candidate x we sample n_entropy_samples
+    simulated_y_at_new_x = (new_x_preds_std.unsqueeze(0) * t.randn(n_entropy_samples, n_candidate_x, y_dim) +
+                            new_x_preds_mean.unsqueeze(0))
+
+    assert simulated_y_at_new_x.size() == t.Size([n_entropy_samples, n_candidate_x, y_dim])
+
+    # then using the posterior as the prior, do bayesian regression using only
+    # new_x as data with the various predicted data,
+    # and compute the difference in entropies
+
+    entropy_samples = t.stack([ bayes_regress_multiple_y(new_x, simulated_y_at_new_x[i], fn_list,
+                          prior_mu=regress_dict['mu_n'],
+                          prior_precision=regress_dict['precision_n'],
+                          a_0=regress_dict['a_n'],
+                          b_0=regress_dict['b_n'])['entropy_fn']() for i in range(0, n_entropy_samples)], dim=0)
+
+    return (regress_dict['entropy_fn']().sum() - t.sum(entropy_samples)/entropy_samples.size(0))
 
 
 

@@ -11,6 +11,8 @@ if __name__ == "__main__":
     prec = t.randn(n,n)
     prec = prec + prec.T + 10*t.eye(n)
 
+    prec.requires_grad = True
+
     L, Q = t.linalg.eigh(prec)
     cov_n_sqrt = (1.0 / t.sqrt(L)).unsqueeze(1) * Q.T
 
@@ -25,8 +27,16 @@ if __name__ == "__main__":
 
     unit_normal_samples = multNormal.sample(t.Size([100000]))
 
-    samples = t.einsum('nj, ji -> ni', unit_normal_samples, cov_n_sqrt)
+    samples = t.einsum('nj, ji -> ni', unit_normal_samples, 2*cov_n_sqrt)
 
     empirical_cov = t.cov(samples.T)
 
-    print(empirical_cov - cov)
+    print(empirical_cov - 4*cov)
+
+    # =====================
+    # testing differentiability
+
+    objective = samples.std()
+    objective.backward()
+
+    print(prec.grad)

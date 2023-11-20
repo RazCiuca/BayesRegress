@@ -5,11 +5,15 @@
 - (done) finish implementing MLE estimation for the prior parameters
     -> (done) verify that the gradients do correspond with the function
     -> (done) make gradient computation faster by avoiding the repetition of long multiplies
-- fix sampling bug, make a new function that accurately samples from MVN with given precision matrix and mean
-- implement infogain for multiple regression
+- (done) fix sampling bug, make a new function that accurately samples from MVN with given precision matrix and mean
+- (done) implement infogain for multiple regression
+- (done) implement regression coefs calculation for multiple x and ys at the same time.
+    -> (done) test equality with non-batched regression coefficients
+    -> (done)get a batch of precision_n, a_n and b_n for batches of x's and y's
+
 - implement infogain optimisation for multiple regression
 - do regression example with prior MLE estimation and infogain
-- refactor codebase
+- refactor codebase: make bayesian regression a class?
 - explanation doc for functions in lin_regress_multiple
 
 - Project: model-based to q-value estimation
