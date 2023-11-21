@@ -11,11 +11,10 @@
     -> (done) test equality with non-batched regression coefficients
     -> (done)get a batch of precision_n, a_n and b_n for batches of x's and y's
 
-- refactor codebase: make bayesian regression a class?
-- explanation doc for functions in lin_regress_multiple
+- (done) refactor codebase
 
 - Project: model-based to q-value estimation
-    - use bayesian regression to fit a quadratic model from state-action to next-state-reward pairs
+    - use bayesian regression to fit a polynomial model from state-action to next-state-reward pairs
     - use samples from the model posterior to fit q-value-functions
     - set the optimisation goal of the network to be the expected td-error under those fitted-q-values
     - use infogain in the following manner: the optimal action is the one with the highest expected q-value,
@@ -23,25 +22,27 @@
         of the model.
 
     functions to write:
-    fit_dynamics_model(states, actions, next_states, rewards)
+    (nov 22) fit_dynamics_model(states, actions, next_states, rewards)
         -> fits a differentiable bayesian model to predict next_states, rewards from states, actions
-    q_func_from_model(states, actions, model_param)
+    (nov 22) q_func_from_model(states, actions, model_param)
         -> takes a given linear/quadratic model for predicting next_states and rewards, and fits a q-value function to it differentiably
         -> the q-value function for a given model parameter will also have a posterior distribution, since a quadratic q-value function
             can't exactly solve quadratic dynamics.
         -> in general the q-value should be more expressive than the model, you can't overfit this easily
-    expected_q_value(actions)
+    (nov 23)expected_q_value(actions)
         -> computes the expected q-value of an action under the model distribution
-    infogain_model(current_action, radius)
+   (nov 23) infogain_model(current_action, radius)
         -> find the action which maximizes the bayesian information gain under a given radius away from current (optimal) action
         -> needs to search over the space of actions, and for each action, predict the possible outcomes (both in states and rewards)
             then imagine adding them to the dataset and see how the entropy changes
-    solve_infogain_mdp()
+    (nov 23)solve_infogain_mdp()
         -> given the space of actions, the infogain of an action is now the reward of a new mdp with dynamics given
             by our model space, and we can plan to take the sequence of actions to maximize our reward
         -> learn a new q-function for this new mdp by sampling datapoints
         -> we can possibly learn from a mix of the true reward and the infogain, overtime the infogain gets smaller and smaller
         -> what's the expected change in the q-value from an infogain?
+
+    (nov 24++) use torchRL to implement the model on mujoco tasks and compare with state-of-the-art
 
     there are a few ways of using information here, we could do the simple trust-region-infogain thing, or we can do
     more complicated versions related to exploring states in order to better explore. In this sense the infogain of an
@@ -51,6 +52,10 @@
       with the highest infogain, or choose among those the one with the highest infogain-q-value!!!
 
 
+- make the optimisation of the prior parameters faster, using hessians, fix the code doing that .
+- Use radial basis functions(multiplied by quadratics) in the bayesian approximation, and do gradient descent on their locations
+    and variances such that the MAP-prior-optim model likelihood is maximized
+- refactor everything into a bayesian regression class, with update equations
 
     todo: mujoco from state space, possibly mujoco from images?
 

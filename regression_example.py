@@ -16,18 +16,19 @@ if __name__ == "__main__":
     data_noise = 1
 
     coefs_0 = t.randn(3)
-    coefs_1 = t.randn(3)
+    coefs_1 = t.tensor([1,2,3])
 
     # fns = [lambda x: t.ones(x.size()), lambda x: x, lambda x: x ** 2]
     # fns = ([lambda x: t.ones(x.size()), lambda x: x, lambda x: x**2, lambda x: 0.5* x**2] + [(lambda x: t.sin(k*x)) for k in [1,2,3,4]] +
     #        [(lambda x: t.cos(k*x)) for k in [1,2,3,4]])
-    fns = [lambda x: get_flat_polynomials(x, 5)] + [(lambda x: t.sin(k*x)) for k in [1,2,3,4]] + [(lambda x: t.cos(k*x)) for k in [1,2,3,4]]
+    fns = [lambda x: get_flat_polynomials(x, 3)] #+ [(lambda x: t.sin(k*x)) for k in range(1, 3)] +
+           #[(lambda x: t.cos(k*x)) for k in range(1, 3)]
     size_x = len(fns)
 
     visualize_x = t.arange(-3, 3, 0.01).unsqueeze(1)
 
-    data_x = t.cat([t.arange(-3, -2, 0.01).unsqueeze(1), t.arange(2, 3, 0.5).unsqueeze(1)], dim=0)
-    data_y_0 = coefs_0[0] + coefs_0[1] * data_x + coefs_0[2] * data_x ** 2
+    data_x = t.cat([t.arange(-3, -2, 0.4).unsqueeze(1), t.arange(2, 3, 0.2).unsqueeze(1)], dim=0)
+    data_y_0 = coefs_0[0] + coefs_0[1] * data_x + coefs_0[2] * data_x ** 2 + 10*t.sin(2*data_x)
     data_y_0 += t.randn(data_y_0.size()) * data_noise
     data_y_0 = data_y_0.reshape(-1, 1)
 
@@ -49,8 +50,7 @@ if __name__ == "__main__":
                                    a_0=a_0,
                                    b_0=b_0)
 
-
-    predict_y_mean, predict_y_std = sol_dict['predict_fn'](visualize_x, n_samples=1000)
+    predict_y_mean, predict_y_std = sol_dict['predict_fn'](visualize_x, n_samples=30)
 
     infogain_x_array = np.arange(-3, 3, 0.01)
     infogains = []
@@ -61,7 +61,7 @@ if __name__ == "__main__":
         new_x = t.tensor([x]).unsqueeze(1).float()
 
         # infogain = infogain_bayes_regress_multiple_y(sol_dict, new_x, n_entropy_samples=500, n_regress_samples=100)
-        infogain2 = infogain_on_posterior(sol_dict, new_x, n_entropy_samples=1000, n_regress_samples=100)
+        infogain2 = infogain_on_posterior(sol_dict, new_x, n_entropy_samples=100, n_regress_samples=30)
 
         # infogains.append(infogain.item())
         infogains2.append(infogain2.item())
@@ -76,8 +76,8 @@ if __name__ == "__main__":
 
     plt.subplot(2,1,1)
 
-    plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy())
-    plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy())
+    plt.scatter(data_x.squeeze().numpy(), data_y_0.numpy(), color='orange')
+    plt.scatter(data_x.squeeze().numpy(), data_y_1.numpy(), color='purple')
 
     plt.plot(visualize_x.squeeze().numpy(), predict_y_mean_0.numpy(), color='red')
     plt.plot(visualize_x.squeeze().numpy(), (predict_y_mean_0 + 1 * predict_y_std_0).numpy(), color='blue')

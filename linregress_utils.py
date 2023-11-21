@@ -74,6 +74,107 @@ def log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x
     return gamma_grad, a_0_grad, b_0_grad
 
 
+# todo: produces unstable answers, unsure if hessian computation is correct
+def log_model_evidence_newton_iteration(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None, verbose=False):
+    """
+    computes the gradient of the log model evidence for each y dimension with respect to gamma, which are the
+    log diagonal parameters of precision_0, i.e. precision_0 = t.diag(t.exp(gamma))
+    and also with respect to a_0 and b_0
+
+    then also computes the hessian of the log model evidence with respect to the vector [gamma_i, a_0, b_0]
+    :param gamma: [y_dim, x_dim]
+    :param a_0 : [y_dim]
+    :param b_0 : [y_dim]
+    :return the optimal gamma, a_0, b_0 for a newton iteration
+    """
+
+    x_dim = data_x.size(1)
+    y_dim = data_y.size(1)
+
+    mu_0 = t.zeros(y_dim, x_dim)
+    precision_0 = t.diag_embed(t.exp(gamma))
+
+    # useful term that remains constant through computation of all gradients
+    xTx = data_x.T @ data_x if x_at_x is None else x_at_x
+    yTx = data_y.T @ data_x if y_at_x is None else y_at_x
+    yTy = t.sum(data_y ** 2, dim=0) if y_2_sum is None else y_2_sum
+
+    mu_n, precision_n, a_n, b_n = posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0,
+                                                              y_at_x=yTx, x_at_x=xTx, y_2_sum=yTy)
+
+    # inverse of each precision matrix
+    # shape [y_dim, x_dim, x_dim]
+    inv_prec_n = precision_n.inverse()
+
+    # shape [y_dim, x_dim], intermediate term in the computation
+    z = t.einsum("ij, ilj -> il ", yTx, inv_prec_n)
+
+    # useful for future computation
+    # this is the matrix of Y.T @ X @ inv_prec @ E_ij @ inv_prec @ X.T @ Y
+    zTz = z.unsqueeze(1) * z.unsqueeze(2)
+    # zTz = t.einsum("mki, mkj -> mij ", z.unsqueeze(1), z.unsqueeze(1))
+
+    exp_gamma = t.exp(gamma)
+
+    # the derivative of b_n with respect to gamma_i
+    # shape [y_dim, x_dim]
+    d_bn_d_gamma = 0.5*exp_gamma * t.diagonal(zTz, dim1=1, dim2=2)
+
+    gamma_grad = 0.5 * t.ones(y_dim, x_dim)
+    gamma_grad -= 0.5 * exp_gamma * t.diagonal(inv_prec_n, dim1=1, dim2=2)
+    gamma_grad -= (a_n / (2 * b_n)).unsqueeze(1) * d_bn_d_gamma
+
+    a_0_grad = t.log(b_0) - t.log(b_n)
+    a_0_grad += t.digamma(a_n) - t.digamma(a_0)
+
+    b_0_grad = a_0 / b_0 - a_n / b_n
+
+    # =================================
+    # Hessian Computation Starts
+    # =================================
+
+    # shape [y_dim, x_dim, x_dim]
+    exp_gamma_i_times_exp_gamma_j = exp_gamma.unsqueeze(1) * exp_gamma.unsqueeze(2)
+
+    # shape [y_dim, x_dim, x_dim]
+    gamma_hess = -0.5 * t.diag_embed(exp_gamma*t.diagonal(inv_prec_n, dim1=1, dim2=2), dim1=1, dim2=2)
+    gamma_hess += 0.5 * exp_gamma_i_times_exp_gamma_j * (inv_prec_n**2)
+    gamma_hess -= t.diag_embed((a_n/b_n).unsqueeze(1) * d_bn_d_gamma, dim1=1, dim2=2)
+    gamma_hess += (a_n/b_n**2).reshape(-1, 1, 1) * (d_bn_d_gamma.unsqueeze(1) * d_bn_d_gamma.unsqueeze(2))
+    gamma_hess += (a_n/b_n).reshape(-1, 1, 1) * exp_gamma_i_times_exp_gamma_j * inv_prec_n * zTz
+
+    # shape [y_dim]
+    a0_2_hess = t.special.polygamma(1, a_n) - t.special.polygamma(1, a_0)
+    b0_2_hess = -a_0/b_0**2 + a_n/b_n**2
+    a0_b0_hess = 1.0/b_0 - 1.0/b_n
+
+    # shape [y_dim, x_dim]
+    b_0_gamma_hess = (a_n/b_n**2).unsqueeze(1) * d_bn_d_gamma
+    a_0_gamma_hess = (-1.0/b_n).unsqueeze(1) * d_bn_d_gamma
+
+    hess_upper = t.cat([gamma_hess, a_0_gamma_hess.unsqueeze(2), b_0_gamma_hess.unsqueeze(2)], dim=2)
+
+    hess_lower1 = t.cat([a_0_gamma_hess, a0_2_hess.unsqueeze(1), a0_b0_hess.unsqueeze(1)], dim=1)
+    hess_lower2 = t.cat([b_0_gamma_hess, a0_b0_hess.unsqueeze(1), b0_2_hess.unsqueeze(1)], dim=1)
+
+    # shape [y_dim, x_dim+2, x_dim+2]
+    hessian = t.cat([hess_upper, hess_lower1.unsqueeze(1), hess_lower2.unsqueeze(1)], dim=1)
+
+    # shape [y_dim, x_dim+2]
+    grad_concat = t.cat([gamma_grad, a_0_grad.unsqueeze(1), b_0_grad.unsqueeze(1)], dim=1)
+
+    newton_iter_solution = -t.linalg.solve(hessian, grad_concat)
+
+    gamma_sol = newton_iter_solution[:, :-2]
+    a_0_sol = newton_iter_solution[:, -2]
+    b_0_sol = newton_iter_solution[:, -1]
+
+    print(f"condition number:{t.linalg.cond(hessian)}")
+
+    return gamma_sol, a_0_sol, b_0_sol, gamma_grad, a_0_grad, b_0_grad
+
+
+
 def posterior_params_linregress(data_x, data_y, mu_0, precision_0, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None):
     """
     :param data_x: Tensor(n_data, size_x)
@@ -186,7 +287,7 @@ def batched_regression_params(data_x, data_y, mu_0, precision_0, a_0, b_0):
     return mu_n, precision_n, a_n.unsqueeze(0).repeat(batch, 1), b_n
 
 
-def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
+def get_MLE_prior_params(data_x, data_y, eps_norm=1e-3, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
     """
     This function does gradient descent on the parameters for the bayesian regression priors to find
     the model which maximises P(Data | model)
@@ -202,10 +303,10 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_
     x_dim = data_x.size(1)
     y_dim = data_y.size(1)
 
-    n_iter = 5000
-    lr_gamma = 1e-2
-    lr_b_0 = 1e-3
-    lr_a_0 = 0.01
+    n_iter = 2000
+    lr_gamma = 1e-1
+    lr_b_0 = 1e-2
+    lr_a_0 = 1e-2
 
     # this is the thing we are optimising
     gamma = t.zeros(y_dim, x_dim) if init_gamma is None else init_gamma
@@ -219,7 +320,7 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_
     x_at_x = data_x.T @ data_x
     y_2_sum = t.sum(data_y ** 2, dim=0)
 
-    with t.no_grad():
+    with (t.no_grad()):
 
         for i in range(n_iter):
             gamma_grad, a_0_grad, b_0_grad = log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0,
@@ -227,17 +328,8 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_
                                                                      verbose=verbose)
 
             gamma += lr_gamma*gamma_grad
-            b_0 += lr_b_0*b_0_grad
             a_0 += lr_a_0*a_0_grad
-
-            if gamma_grad.norm() < 1:
-                lr_gamma = 0.1
-
-            if b_0_grad.norm() < 1:
-                lr_b_0 = 5e-2
-
-            if a_0_grad.norm() < 1:
-                lr_a_0 = 0.1
+            b_0 += lr_b_0*b_0_grad
 
             if gamma_grad.norm().item() < eps_norm and b_0_grad.norm() < eps_norm and a_0_grad.norm() < eps_norm:
                 break
@@ -245,6 +337,8 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-2, init_gamma=None, init_b_
             if verbose:
                 print(f"{i}: gamma grad norm: {gamma_grad.norm().item()}, b_0 norm: {b_0_grad.norm().item()}, a_0 norm: {a_0_grad.norm().item()}")
             # print(gamma, a_0, b_0)
+            if t.isnan(gamma_grad.norm()):
+                break
 
     return mu_0, t.diag_embed(t.exp(gamma)), a_0, b_0
 

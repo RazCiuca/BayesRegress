@@ -10,6 +10,8 @@ def fit_dynamics_model(states, actions, next_states, rewards):
 
     IMPORTANT: assumes states and actions are normalised to zero mean and unit variance
 
+    optimise the prior when you do this function
+
     :param states : shape [n_data, state_dim]
     :param actions : shape [n_data, action_dim]
     :param next_states : shape [n_data, state_dim]
