@@ -287,7 +287,7 @@ def batched_regression_params(data_x, data_y, mu_0, precision_0, a_0, b_0):
     return mu_n, precision_n, a_n.unsqueeze(0).repeat(batch, 1), b_n
 
 
-def get_MLE_prior_params(data_x, data_y, eps_norm=1e-3, init_gamma=None, init_b_0=None, init_a_0=None, verbose=False):
+def get_MLE_prior_params(data_x, data_y, eps_norm=1e-3, init_gamma=None, init_b_0=None, init_a_0=None, n_iter=None, verbose=False):
     """
     This function does gradient descent on the parameters for the bayesian regression priors to find
     the model which maximises P(Data | model)
@@ -303,7 +303,7 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-3, init_gamma=None, init_b_
     x_dim = data_x.size(1)
     y_dim = data_y.size(1)
 
-    n_iter = 2000
+    n_iter = 10000 if n_iter is None else n_iter
     lr_gamma = 1e-1
     lr_b_0 = 1e-2
     lr_a_0 = 1e-2

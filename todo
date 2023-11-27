@@ -22,20 +22,25 @@
         of the model.
 
     functions to write:
-    (nov 22) fit_dynamics_model(states, actions, next_states, rewards)
+    (done) fit_dynamics_model(states, actions, next_states, rewards)
         -> fits a differentiable bayesian model to predict next_states, rewards from states, actions
+    (done) sample_from_dynamics_model
+        -> sample next states from dynamics model
     (nov 22) q_func_from_model(states, actions, model_param)
         -> takes a given linear/quadratic model for predicting next_states and rewards, and fits a q-value function to it differentiably
         -> the q-value function for a given model parameter will also have a posterior distribution, since a quadratic q-value function
             can't exactly solve quadratic dynamics.
+        -> need to solve for the maximum of the q-value function easily
+            -> fit the maximum location with a general function, and also output the positive definite hessian around the maximum
+            -> treat this as almost linear regression
         -> in general the q-value should be more expressive than the model, you can't overfit this easily
-    (nov 23)expected_q_value(actions)
+   (nov 23)expected_q_value(actions)
         -> computes the expected q-value of an action under the model distribution
    (nov 23) infogain_model(current_action, radius)
         -> find the action which maximizes the bayesian information gain under a given radius away from current (optimal) action
         -> needs to search over the space of actions, and for each action, predict the possible outcomes (both in states and rewards)
             then imagine adding them to the dataset and see how the entropy changes
-    (nov 23)solve_infogain_mdp()
+    (nov 24++)solve_infogain_mdp()
         -> given the space of actions, the infogain of an action is now the reward of a new mdp with dynamics given
             by our model space, and we can plan to take the sequence of actions to maximize our reward
         -> learn a new q-function for this new mdp by sampling datapoints
@@ -52,11 +57,24 @@
       with the highest infogain, or choose among those the one with the highest infogain-q-value!!!
 
 
+- plan things needed to evaluate algorithms and competition with torchrl
+- write skeleton code for pytorchrl functions
+- test DDPG, PPO, etc. with stable-baselines-3
+
 - make the optimisation of the prior parameters faster, using hessians, fix the code doing that .
 - Use radial basis functions(multiplied by quadratics) in the bayesian approximation, and do gradient descent on their locations
     and variances such that the MAP-prior-optim model likelihood is maximized
 - refactor everything into a bayesian regression class, with update equations
 
-    todo: mujoco from state space, possibly mujoco from images?
+    todo: mujoco from state space, and mujoco from images
+
+- given a list of states encountered, and sampled states around those not encountered
+- for each sampled dynamics model:
+    - sample a bunch of next-state-reward tuples from that model
+    - fit a q-function to that dynamics model
+    - compute the TD-error for the real dataset with this model
+- compute the average TD-error over all sampled dynamics model, that's out objective to minimize
+- ACTOR: compute the maximum (using GD) of the expected q-value of an action, then
+         take gradient steps towards the maximum infogain action until we get below some treshold for the optimal q-value
 
 
