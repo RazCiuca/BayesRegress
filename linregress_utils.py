@@ -74,7 +74,7 @@ def log_model_evidence_grad(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x
     return gamma_grad, a_0_grad, b_0_grad
 
 
-# todo: produces unstable answers, unsure if hessian computation is correct
+# todo_rl: produces unstable answers, unsure if hessian computation is correct
 def log_model_evidence_newton_iteration(data_x, data_y, gamma, a_0, b_0, y_at_x=None, x_at_x=None, y_2_sum=None, verbose=False):
     """
     computes the gradient of the log model evidence for each y dimension with respect to gamma, which are the

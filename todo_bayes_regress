@@ -1,0 +1,15 @@
+
+We are refactoring the project into purely a differentiable linear and logistic regression package.
+And also using infogain
+
+Steps:
+
+- finish coding logistic regression + differentiable estimate
+- test logistic regression
+- write prior_optimisation for logistic regression
+    -> estimate model likelihood using importance sampling from the gaussian approximation and the real posterior
+- refactor all code into nn modules
+- include prior precision attenuation every minibatch, so we allow for learning
+- include radial basis functions
+
+

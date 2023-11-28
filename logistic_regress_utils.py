@@ -2,92 +2,144 @@
 In this file we do approximate bayesian logistic regression in a
 fully differentiable way
 
-multi-class regression can be done with multiple logistic regressions on
-the individual classes
+The goal is to implement bayesian logistic regression in a differentiable way.
+Complete with computing the model likelihood with importance sampling, setting prior distributions,
+and using samples from the posterior to predict likelihoods at specific points.
+All differentiably, so that all our outputs can be passed through backprop in the pytorch engine.
 
-steps in bayesian logistic regression:
-
-- set up the loss function
-- compute the gradient and hessian explicitely (without autograd)
-- get the minimum of the loss offgraph
-- compute predictions by sampling from posterior and averaging
-
-todo - treat the case where we have k possible choices
-todo - treat the case where we want to use a prior, but possibly reduce its importance a little bit
-
-See Murphy 2011 pages 248 to 253 for equations for the Newton algorithm solution to logistic regreession
-
-Goal: do quadratic logistic regression using newton's method in a differentiable way, so that we can
-place it at the last layer of a neural network, and thus get good results this way.
-
-if you have n features at the end of the neural network, you'll get 1 + n + n*(n-1)/2 = n*(n+1)/2 + 1 = N features for
-regression, so the hessian will have size N x N, if n=100, we get N = 5051
 
 """
+import pandas as pd
+from linregress_utils import *
 
-from old.linregress_utils import *
-
-def bayesian_logistic_regression(data_x, data_y, n_cat, fns, prior_mu, prior_precision):
+def fit_logreg(data_x, data_y, n_cat, fns, prior_mu=None, prior_precision=None):
     """
-    :param data_x: tensor(n_data, x_size)
-    :param data_y: LongTensor(n_data), categories
-    :param n_cat : integer, number of categories
-    :param fns: list of functions to use for fitting
-    :param prior_mu: tensor(n_cat, len(fns)), prior mean for the parameters
-    :param prior_precision: tensor(n_cat, len(fns), len(fns)), prior precision for the parameters
-    :return: dict with the following fields: 'fns', 'mu_n', 'lambda_n', 'sampling_fn', 'predict_fn', 'entropy', 'log_model_ev'
+    todo: by convention the prior_precision is positive_definite, but in this algorithm we need the prior hessian,
+    which will be negative-definite because we're maximizing a function here
+    :param data_x:
+    :param data_y:
+    :param n_cat:
+    :param fns:
+    :param prior_mu:
+    :param prior_precision:
+    :return:
     """
-
-    # apply functions to raw data
     data_x = apply_and_concat(data_x, fns)
     x_dim = data_x.size(1)
     n_data = data_x.size(0)
+    gd_n_iter = 1000
+    gd_lr=0.01
+    newton_n_iter = 50
 
-    # make y_data tensors for each different category
     # has shape [n_data, n_cat]
     data_y = t.nn.functional.one_hot(data_y, num_classes=n_cat)
+    # initial random vector
+    w = t.zeros(n_cat - 1, x_dim)
 
-    # initialise the weights to random
-    w = t.randn(n_cat, x_dim)
+    # ========== COMPUTATION BEGINS ===========
 
-    # mu = logistic(w^T dot X)
-    # gradient = X^T dot (mu - Y)
-    # Hessian = X^T dot (diag(mu*(1-mu))) dot X
+    # FIRST, normal GD
 
-    # Step 1: taking a few gradient hessian steps to get to the minimum without creating an autodiff graph
+    with t.no_grad():
 
-    step_norm = t.inf
-    epsilon = 1e-2
+        for iter in range(0, gd_n_iter):
 
-    # todo: incorporate a prior gaussian in the optimisation, so we can do infogain on single examples in general
+            # shape [n_data, n_cat-1]
+            mu = data_x @ w.T
 
-    with (t.no_grad):
-        while step_norm > epsilon:
-            # shape [n_data, n_cat]
-            mu = t.sigmoid(data_x @ w.T)
-            # shape [dim_x, n_cat]
-            gradient = data_x.T @ (mu - data_y)
+            eta_k = t.nn.functional.softmax(t.cat([mu, t.zeros(n_data, 1)], dim=1), dim=1)[:, :-1]
 
-            # adding the prior component to the gradient
-            # todo: check the sign here, are we optimising negative log-likelihood?
-            gradient += prior_precision @ (w - prior_mu)
+            # shape [n_data, n_cat-1]
+            y_min_etak = data_y[:, :-1] - eta_k
 
-            # we're doing a sum over a tensor with dim [n_data, n_cat, dim_x, dim_x]
-            # and keeping only the last 3 dimensions [n_cat, dim_x, dim_x]
-            hessian = prior_precision + t.einsum("nk, ni, nj -> kij", mu*(1-mu), data_x, data_x)
+            # size [n_cat-1, x_dim]
+            gradient = y_min_etak.T @ data_x
 
-            # now compute the newton step update
-            # step has shape [n_cat, dim_x]
-            step = t.linalg.solve(hessian, -gradient.T)
+            w += gd_lr * gradient
 
-            # compute the norm of step for convergence detection
-            step_norm = t.norm(step).item()
-            w += step
+    # Second, newton iteration
 
-    # Step 2: compute the hessian at the minimum with autodiff on
+    with t.no_grad():
 
-    # step 3: take an extra step, now with autodiff on, now we have  the minimum
+        for iter in range(0, newton_n_iter):
 
-    # define sampling, prediction, log model evidence, model entropy functions
+            print("weights:")
+            print(w)
 
+            # shape [n_data, n_cat-1]
+            mu = data_x @ w.T
+            eta_k = t.nn.functional.softmax(t.cat([mu, t.zeros(n_data, 1)], dim=1), dim=1)[:, :-1]
+
+            # shape [n_data, n_cat-1]
+            y_min_etak = data_y[:, :-1] - eta_k
+
+            # # shape [x_dim, n_cat-1]
+            # if prior_mu is not None:
+            #     grad_from_prior = prior_precision @ (w.flatten() - prior_mu)
+            #
+            # # size [n_cat-1, x_dim]
+            # gradient = y_min_etak.T @ data_x
+            # computation until this point works fine
+            # shape [n_cat-1, x_dim,n_cat-1, x_dim]
+            # hessian = - t.einsum("nl, nk, ni, nj -> kilj", eta_k, y_min_etak, data_x, data_x)
+            #
+            # # flatten it into [x_dim*(n_cat-1), x_dim*(n_cat-1)]
+            # hessian = hessian.flatten(2, 3).flatten(0, 1)
+            # if prior_precision is not None:
+            #     hessian = hessian - prior_precision
+            #
+            # # print(hessian)
+            #
+            # w_map = w.flatten() - t.linalg.solve(hessian, gradient.flatten() + (grad_from_prior if prior_mu is not None else 0))
+            # w = w_map.reshape(n_cat-1, x_dim)
+
+            # =====================================================================
+
+            # size [n_cat-1, x_dim]
+            gradient = y_min_etak.T @ data_x
+
+            # shape[n_cat - 1, x_dim, x_dim]
+            hessian = - t.einsum("nk, nk, ni, nj -> kij", eta_k, y_min_etak, data_x, data_x)
+            hessian -= 1e-2*t.eye(hessian.size(-1)).unsqueeze(0)
+
+            print(f"det hessians: {t.det(hessian)}")
+
+            w = w - 0.1*t.linalg.solve(hessian, gradient)
+
+
+    optimal_w = w
+
+    def predict_fn(x):
+        mu = apply_and_concat(x, fns) @ optimal_w.T
+
+        eta = t.nn.functional.softmax(t.cat([mu, t.zeros(n_data, 1)], dim=1), dim=1)
+
+        return eta
+
+
+    return w, predict_fn
+
+
+if __name__ == "__main__":
+
+    # load IRIS dataset
+    dataset = pd.read_csv('datasets/iris.csv')
+
+    # transform species to numerics
+    dataset.loc[dataset.species == 'Iris-setosa', 'species'] = 0
+    dataset.loc[dataset.species == 'Iris-versicolor', 'species'] = 1
+    dataset.loc[dataset.species == 'Iris-virginica', 'species'] = 2
+
+    x = t.tensor(dataset[dataset.columns[0:4]].values.astype(np.float32))
+    y = t.tensor(dataset.species.values.astype(np.int64))
+
+    # x = t.cat([x, t.randn(50, 4)])
+    # y = t.cat([y, t.multinomial(t.tensor([1.0,1.0,1.0]), 50, replacement=True)])
+
+    fns = [lambda x: t.ones(x.size()), lambda x: x]
+
+    prior_mu = t.zeros(16)
+    prior_precision = 1*t.eye(16)
+
+    w, predict_fn = fit_logreg(x,y,3, fns, prior_mu=prior_mu, prior_precision=prior_precision)
 

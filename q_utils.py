@@ -27,7 +27,7 @@ def fit_dynamics_model(states, actions, next_states, rewards, regress_fns=None, 
     data_y = t.cat([next_states, rewards.unsqueeze(1)], dim=1)
 
     if tuple_priors is not None:
-        # todo: if we have some prior knowledge about optimal priors, start with those and do less iterations
+        # todo_rl: if we have some prior knowledge about optimal priors, start with those and do less iterations
         pass
 
     mu_0, precision_0, a_0, b_0 = get_MLE_prior_params(apply_and_concat(data_x, regress_fns), data_y, verbose=False)

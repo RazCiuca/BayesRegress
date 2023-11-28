@@ -2,11 +2,11 @@
 This file defines differentiable pytorch functions which allow us to do
 bayesian linear regression with automatic variable selection in a differentiable way.
 
-todo: write optim routine to return the optimal state to explore for infogain
-todo: write regression function for arbitrary numbers of hypotheses
-todo : unit tests to make sure all works
+todo_rl: write optim routine to return the optimal state to explore for infogain
+todo_rl: write regression function for arbitrary numbers of hypotheses
+todo_rl : unit tests to make sure all works
 
-todo: use t.linalg.solve(A,B) instead of A.inverse() @ B, it's faster and more stable
+todo_rl: use t.linalg.solve(A,B) instead of A.inverse() @ B, it's faster and more stable
 
 """
 import torch as t
