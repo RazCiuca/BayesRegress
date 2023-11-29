@@ -135,7 +135,7 @@ def fit_logreg(data_x, data_y, n_cat, fns, prior_mu=None, prior_precision=None, 
         return eta
 
     # predict using full bayesian inference
-    def predict_fn(x, n_samples=100):
+    def predict_fn(x, n_samples=10000):
 
         n_data = x.size(0)
 
@@ -169,11 +169,37 @@ def fit_logreg(data_x, data_y, n_cat, fns, prior_mu=None, prior_precision=None, 
 
     return w, predict_fn, get_log_model_likelihood
 
-def get_MLE_prior_params_for_logreg(data_x, data_y):
+def get_MLE_prior_params_for_logreg(data_x, data_y, fns, n_cat, init_gamma=None, n_iter=None, verbose=False):
 
     # use a built-in pytorch optimiser to optimise the log model likelihood diagonal priors
+    x_dim = apply_and_concat(data_x, fns).size(1)
+    w_dim = x_dim*(n_cat-1)
 
-    pass
+    gamma = t.zeros(w_dim) if init_gamma is None else init_gamma
+    gamma.requires_grad = True
+    prior_mu = t.zeros(w_dim)
+    optimizer = t.optim.Adam([gamma], lr=0.1)
+
+    n_iter = 1000 if n_iter is None else n_iter
+
+    for iter in range(0, n_iter):
+        prior_precision = t.diag(t.exp(gamma))
+
+        w, predict_fn, get_log_model_likelihood = fit_logreg(data_x, data_y, n_cat, fns,
+                                                             prior_mu=prior_mu, prior_precision=prior_precision,
+                                                             init_w=None, verbose=False)
+
+        obj = -get_log_model_likelihood(n_samples=10000)
+
+        if verbose:
+            print(f"iter {iter}, log model likelihood: {-obj.item()}")
+
+        optimizer.zero_grad()
+        obj.backward()
+        optimizer.step()
+
+    return prior_mu, t.diag(t.exp(gamma))
+
 
 if __name__ == "__main__":
 
@@ -192,19 +218,15 @@ if __name__ == "__main__":
 
     x.requires_grad = True
 
-    # x = t.cat([x, t.randn(50, 4)])
-    # y = t.cat([y, t.multinomial(t.tensor([1.0,1.0,1.0]), 50, replacement=True)])
-
     # fns = [lambda x: t.ones(x.size()), lambda x: x]
-    fns = [lambda x: get_flat_polynomials(x, 1)]
+    fns = [lambda x: get_flat_polynomials(x, 2)]
 
     w_dim = apply_and_concat(x, fns).size(1)*(n_cat-1)
 
-    prior_mu = t.zeros(w_dim)
-    prior_precision = 1e-2*t.eye(w_dim)
+    prior_mu, prior_precision = get_MLE_prior_params_for_logreg(x, y, fns, n_cat, n_iter=500, verbose=True)
 
     w, predict_fn, get_log_model_likelihood = fit_logreg(x,y,3, fns, prior_mu=prior_mu, prior_precision=prior_precision)
 
-    print(predict_fn(x, n_samples=100))
+    predictions = predict_fn(x, n_samples=1000)
 
     print(f"model likelihood: {get_log_model_likelihood()}")
