@@ -4,7 +4,8 @@ And also using infogain
 
 Steps:
 
-- write prior_optimisation for logistic regression using pytorch gradients
+- write convnet and MLP with the logistic regression as output
+
 - refactor all code into nn modules
 - include prior precision attenuation every minibatch, so we allow for learning
 - include radial basis functions
