@@ -2,8 +2,12 @@
 We are refactoring the project into purely a differentiable linear and logistic regression package.
 And also using infogain
 
-Steps:
+Steps:- stabilize hessian algorithm
+- port linear regression and logistic regression things to GPU
+- visualize them
 
+
+- understand why the logistic regression with Newton method converges very poorly. And fix convergence issues
 - write convnet and MLP with the logistic regression as output
 
 - refactor all code into nn modules

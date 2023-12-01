@@ -1,4 +1,14 @@
+"""
+By Razvan Ciuca, 2023
 
+This file provides utilities for doing bayesian linear regression with generalized input functions,
+using pytorch end-to-end, so that the entire computation is differentiable with autograd.
+
+We also provide functions for computing the model evidence, for optimising the prior precision matrix
+to maximize model likelihood, for doing information gain on future inputs to the regression, and for posterior
+sampling and prediction.
+
+"""
 import torch as t
 import numpy as np
 import matplotlib.pyplot as plt
@@ -304,8 +314,8 @@ def get_MLE_prior_params(data_x, data_y, eps_norm=1e-3, init_gamma=None, init_b_
     y_dim = data_y.size(1)
 
     n_iter = 10000 if n_iter is None else n_iter
-    lr_gamma = 1e-1
-    lr_b_0 = 1e-2
+    lr_gamma = 1e-2
+    lr_b_0 = 1e-3
     lr_a_0 = 1e-2
 
     # this is the thing we are optimising
@@ -654,7 +664,7 @@ def apply_and_concat(x, fn_list):
     return t.cat([fn(x) for fn in fn_list], dim=1)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__0":
     data_noise = 0.1
 
     coefs_0 = t.randn(3)
@@ -754,7 +764,7 @@ if __name__ == "__main__0":
     print(gamma_grad)
 
 # testing prediction
-if __name__ == "__main__1":
+if __name__ == "__main__":
     data_noise = 0.1
 
     coefs_0 = t.randn(3)
